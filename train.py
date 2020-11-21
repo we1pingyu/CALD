@@ -20,6 +20,9 @@ the number of epochs should be adapted so that we have the same number of iterat
 import datetime
 import os
 import time
+import random
+import math
+import sys
 
 import torch
 import torch.utils.data
@@ -27,36 +30,75 @@ from torch import nn
 import torchvision
 import torchvision.models.detection
 import torchvision.models.detection.mask_rcnn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+import torch.optim.lr_scheduler as lr_scheduler
+from torch.utils.data.sampler import SubsetRandomSampler
 
-from .coco_utils import get_coco, get_coco_kp
-
-from .group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
-from .engine import train_one_epoch, evaluate
-
-from . import utils
-from . import transforms as T
-
-
-def get_dataset(name, image_set, transform, data_path):
-    paths = {
-        "coco": (data_path, get_coco, 91),
-        "coco_kp": (data_path, get_coco_kp, 2)
-    }
-    p, ds_fn, num_classes = paths[name]
-
-    ds = ds_fn(p, image_set=image_set, transforms=transform)
-    return ds, num_classes
+from detection.frcnn_feature import fasterrcnn_resnet50_fpn_feature
+from detection.coco_utils import get_coco, get_coco_kp
+from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
+from detection.engine import evaluate
+from detection import utils
+from detection import transforms as T
+from detection.train import *
 
 
-def get_transform(train):
-    transforms = []
-    transforms.append(T.ToTensor())
-    if train:
-        transforms.append(T.RandomHorizontalFlip(0.5))
-    return T.Compose(transforms)
+def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
+    model.train()
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Epoch: [{}]'.format(epoch)
+
+    lr_scheduler = None
+    if epoch == 0:
+        warmup_factor = 1. / 1000
+        warmup_iters = min(1000, len(data_loader) - 1)
+
+        lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
+
+    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
+        images = list(image.to(device) for image in images)
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        features, loss_dict = model(images, targets)
+        loss_dict['loss_objectness'] = torch.mean(loss_dict['loss_objectness'])
+        loss_dict['loss_rpn_box_reg'] = torch.mean(loss_dict['loss_rpn_box_reg'])
+        loss_dict['loss_classifier'] = torch.mean(loss_dict['loss_classifier'])
+        loss_dict['loss_box_reg'] = torch.mean(loss_dict['loss_box_reg'])
+        losses = sum(loss for loss in loss_dict.values())
+
+        # reduce losses over all GPUs for logging purposes
+        loss_dict_reduced = utils.reduce_dict(loss_dict)
+        losses_reduced = sum(loss.cpu() for loss in loss_dict_reduced.values())
+
+        loss_value = losses_reduced.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+            print(loss_dict_reduced)
+            sys.exit(1)
+
+        optimizer.zero_grad()
+        losses.backward()
+        optimizer.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
+        metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+    return metric_logger
 
 
 def main(args):
+    torch.cuda.set_device(1)
+    random.seed(0)
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    torch.cuda.manual_seed_all(0)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.enabled = False
     utils.init_distributed_mode(args)
     print(args)
 
@@ -69,12 +111,14 @@ def main(args):
     dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
 
     print("Creating data loaders")
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test)
-    else:
-        train_sampler = torch.utils.data.RandomSampler(dataset)
-        test_sampler = torch.utils.data.SequentialSampler(dataset_test)
+
+    num_images = len(dataset)
+    indices = list(range(num_images))
+    random.shuffle(indices)
+    labeled_set = indices[:int(num_images * 0.1)]
+    unlabeled_set = indices[int(num_images * 0.1):]
+    train_sampler = SubsetRandomSampler(labeled_set)
+    test_sampler = torch.utils.data.SequentialSampler(dataset_test)
 
     if args.aspect_ratio_group_factor >= 0:
         group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
@@ -93,37 +137,20 @@ def main(args):
         collate_fn=utils.collate_fn)
 
     print("Creating model")
-    model = torchvision.models.detection.__dict__[args.model](num_classes=num_classes,
-                                                              pretrained=args.pretrained)
+    model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes)
     model.to(device)
 
     model_without_ddp = model
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model)
-        model_without_ddp = model.module
+
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(
         params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
-    # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma)
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.lr_steps, gamma=args.lr_gamma)
-
-    if args.resume:
-        checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-        args.start_epoch = checkpoint['epoch'] + 1
-
-    if args.test_only:
-        evaluate(model, data_loader_test, device=device)
-        return
 
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq)
         lr_scheduler.step()
         if args.output_dir:
@@ -134,9 +161,8 @@ def main(args):
                 'args': args,
                 'epoch': epoch},
                 os.path.join(args.output_dir, 'model_{}.pth'.format(epoch)))
-
         # evaluate after every epoch
-        evaluate(model, data_loader_test, device=device)
+        evaluate(model, data_loader_test)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -153,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', default='coco', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
-    parser.add_argument('-b', '--batch-size', default=16, type=int,
+    parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('--epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
@@ -171,7 +197,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr-steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=20, type=int, help='print frequency')
-    parser.add_argument('--output-dir', default='.', help='path where to save')
+    parser.add_argument('--output-dir', default=None, help='path where to save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)

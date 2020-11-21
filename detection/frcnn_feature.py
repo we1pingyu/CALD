@@ -52,6 +52,8 @@ def _fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
             regression_target[sampled_pos_inds_subset],
             reduction="sum",
         ) / label.numel())
+    classification_loss = torch.stack(classification_loss)
+    box_loss = torch.stack(box_loss)
     return classification_loss, box_loss
 
 
@@ -224,7 +226,7 @@ def concat_box_prediction_layers(box_cls, box_regression):
     # concatenate on the first dimension (representing the feature levels), to
     # take into account the way the labels were generated (with all feature maps
     # being concatenated as well)
-    _box_cls = torch.cat(box_cls_flattened, dim=1).flatten(-2)
+    _box_cls = torch.cat(box_cls_flattened, dim=1)
     _box_regression = torch.cat(box_regression_flattened, dim=1)
     box_cls = torch.cat(box_cls_flattened, dim=1).flatten(0, -2)
     box_regression = torch.cat(box_regression_flattened, dim=1).reshape(-1, 4)
@@ -232,6 +234,7 @@ def concat_box_prediction_layers(box_cls, box_regression):
 
 
 class RegionProposalNetwork(_RegionProposalNetwork):
+
     def _compute_loss(self, objectness, pred_bbox_deltas, labels, regression_targets):
         # type: (Tensor, Tensor, List[Tensor], List[Tensor])
         """
@@ -259,12 +262,12 @@ class RegionProposalNetwork(_RegionProposalNetwork):
             box_loss.append(F.l1_loss(
                 pred_bbox_delta[sampled_pos_ind],
                 regression_target[sampled_pos_ind],
-                reduction="sum",
-            ) / (sampled_inds.numel()))
-
+                reduction="sum") / (sampled_inds.numel()))
+            obj = obj.flatten()
             objectness_loss.append(F.binary_cross_entropy_with_logits(
-                obj[sampled_inds], label[sampled_inds]
-            ))
+                obj[sampled_inds], label[sampled_inds]))
+        objectness_loss = torch.stack(objectness_loss)
+        box_loss = torch.stack(box_loss)
         return objectness_loss, box_loss
 
     @property
@@ -345,7 +348,6 @@ class RegionProposalNetwork(_RegionProposalNetwork):
 
         _objectness, _pred_bbox_deltas, objectness, pred_bbox_deltas = \
             concat_box_prediction_layers(objectness, pred_bbox_deltas)
-
         # apply pred_bbox_deltas to anchors to obtain the decoded proposals
         # note that we detach the deltas because Faster R-CNN do not backprop through
         # the proposals
