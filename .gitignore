@@ -22,6 +22,7 @@ data/*
 */**/**/*.pyc
 */**/**/**/*.pyc
 */**/**/**/**/*.pyc
+vis/
 aten/build/
 aten/src/ATen/Config.h
 aten/src/ATen/cuda/CUDAConfig.h

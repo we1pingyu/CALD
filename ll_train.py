@@ -216,15 +216,14 @@ def main(args):
 
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += list(torch.tensor(subset)[arg][int(-0.05 * num_images):].numpy())
-        unlabeled_set = list(torch.tensor(subset)[arg][:int(-0.05 * num_images)].numpy()) + \
-                        unlabeled_set[int(0.2 * num_images):]
+        unlabeled_set = list(torch.tensor(subset)[arg][:int(-0.05 * num_images)].numpy()) + unlabeled_set
 
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
 
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+        total_time = time.time() - start_time
+        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+        print('Training time {}'.format(total_time_str))
 
 
 if __name__ == "__main__":

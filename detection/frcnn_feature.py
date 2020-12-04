@@ -18,6 +18,7 @@ from torchvision.models.detection import _utils as det_utils
 from torch.jit.annotations import Optional, List, Dict, Tuple
 from torchvision.ops import boxes as box_ops
 from torchvision.models.utils import load_state_dict_from_url
+import torch
 
 model_urls = {
     'fasterrcnn_resnet50_fpn_coco':
@@ -63,8 +64,81 @@ def _fastrcnn_loss(class_logits, box_regression, labels, regression_targets):
     return classification_loss, box_loss
 
 
+def judge_y(score):
+    '''return :
+    y:np.array len(score)
+    '''
+    y = []
+    for s in score:
+        if s == 1 or torch.log(s) > torch.log(1 - s):
+            y.append(1)
+        else:
+            y.append(-1)
+    return y
+
+
 class RoIHeads(_RoIHeads):
-    def forward(self, features, proposals, image_shapes, targets=None):
+
+    def ssm_postprocess_detections(self, class_logits, box_regression, proposals, image_shapes):
+        device = class_logits.device
+        num_classes = class_logits.shape[-1]
+
+        boxes_per_image = [len(boxes_in_image) for boxes_in_image in proposals]
+        pred_boxes = self.box_coder.decode(box_regression, proposals)
+
+        pred_scores = F.softmax(class_logits, -1)
+
+        # split boxes and scores per image
+        pred_boxes = pred_boxes.split(boxes_per_image, 0)
+        pred_scores = pred_scores.split(boxes_per_image, 0)
+        al_idx = 0
+        all_boxes = torch.empty([0, 4]).cuda()
+        all_scores = torch.tensor([]).cuda()
+        all_labels = []
+        CONF_THRESH = 0.1  # bigger leads more active learning samples
+        for boxes, scores, image_shape in zip(pred_boxes, pred_scores, image_shapes):
+            boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
+            # create labels for each prediction
+            labels = torch.arange(num_classes, device=device)
+            labels = labels.view(1, -1).expand_as(scores)
+
+            # remove predictions with the background label
+            boxes = boxes[:, 1:]
+            scores = scores[:, 1:]
+            labels = labels[:, 1:]
+            if torch.max(scores) < CONF_THRESH:
+                al_idx = 1
+                continue
+            for cls_ind in range(num_classes - 1):
+                cls_boxes = boxes[:, cls_ind]
+                cls_scores = scores[:, cls_ind]
+                cls_labels = labels[:, cls_ind]
+                # batch everything, by making every class prediction be a separate instance
+                cls_boxes = cls_boxes.reshape(-1, 4)
+                cls_scores = cls_scores.flatten()
+                cls_labels = cls_labels.flatten()
+
+                # remove low scoring boxes
+
+                # non-maximum suppression, independently done per class
+                keep = box_ops.batched_nms(cls_boxes, cls_scores, cls_labels, self.nms_thresh)
+                # keep only topk scoring predictions
+                keep = keep[:self.detections_per_img]
+                cls_boxes, cls_scores, cls_labels = cls_boxes[keep], cls_scores[keep], cls_labels[keep]
+                inds = torch.nonzero(cls_scores > self.score_thresh).squeeze(1)
+                if len(inds) == 0:
+                    continue
+                for j in inds:
+                    # boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
+
+                    all_boxes = torch.cat((all_boxes, cls_boxes[j].unsqueeze(0)), 0)
+                    k = keep[j]
+                    all_scores = torch.cat((all_scores, scores[k].unsqueeze(0)), 0)
+                    all_labels.append(judge_y(scores[k]))
+        # all_scores = [torch.cat(all_scores, 1)]
+        return [all_boxes], [all_scores], [all_labels], al_idx
+
+    def forward(self, features, proposals, image_shapes, ssm, targets=None):
         # type: (Dict[str, Tensor], List[Tensor], List[Tuple[int, int]], Optional[List[Dict[str, Tensor]]])
         """
         Arguments:
@@ -101,106 +175,31 @@ class RoIHeads(_RoIHeads):
                 "loss_box_reg": loss_box_reg
             }
         else:
-            boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
-            num_images = len(boxes)
-            for i in range(num_images):
-                result.append(
-                    {
-                        "boxes": boxes[i],
-                        "labels": labels[i],
-                        "scores": scores[i],
-                    }
-                )
-
-        if self.has_mask():
-            mask_proposals = [p["boxes"] for p in result]
-            if self.training:
-                assert matched_idxs is not None
-                # during training, only focus on positive boxes
-                num_images = len(proposals)
-                mask_proposals = []
-                pos_matched_idxs = []
-                for img_id in range(num_images):
-                    pos = torch.nonzero(labels[img_id] > 0).squeeze(1)
-                    mask_proposals.append(proposals[img_id][pos])
-                    pos_matched_idxs.append(matched_idxs[img_id][pos])
+            if ssm:
+                boxes, scores, labels, al = self.ssm_postprocess_detections(class_logits, box_regression,
+                                                                            proposals, image_shapes)
+                num_images = len(boxes)
+                for i in range(num_images):
+                    result.append(
+                        {
+                            "boxes": boxes[i],
+                            "labels": labels[i],
+                            "scores": scores[i],
+                            'al': al,
+                        }
+                    )
             else:
-                pos_matched_idxs = None
-
-            if self.mask_roi_pool is not None:
-                mask_features = self.mask_roi_pool(features, mask_proposals, image_shapes)
-                mask_features = self.mask_head(mask_features)
-                mask_logits = self.mask_predictor(mask_features)
-            else:
-                mask_logits = torch.tensor(0)
-                raise Exception("Expected mask_roi_pool to be not None")
-
-            loss_mask = {}
-            if self.training:
-                assert targets is not None
-                assert pos_matched_idxs is not None
-                assert mask_logits is not None
-
-                gt_masks = [t["masks"] for t in targets]
-                gt_labels = [t["labels"] for t in targets]
-                rcnn_loss_mask = maskrcnn_loss(
-                    mask_logits, mask_proposals,
-                    gt_masks, gt_labels, pos_matched_idxs)
-                loss_mask = {
-                    "loss_mask": rcnn_loss_mask
-                }
-            else:
-                labels = [r["labels"] for r in result]
-                masks_probs = maskrcnn_inference(mask_logits, labels)
-                for mask_prob, r in zip(masks_probs, result):
-                    r["masks"] = mask_prob
-
-            losses.update(loss_mask)
-
-        # keep none checks in if conditional so torchscript will conditionally
-        # compile each branch
-        if self.keypoint_roi_pool is not None and self.keypoint_head is not None \
-                and self.keypoint_predictor is not None:
-            keypoint_proposals = [p["boxes"] for p in result]
-            if self.training:
-                # during training, only focus on positive boxes
-                num_images = len(proposals)
-                keypoint_proposals = []
-                pos_matched_idxs = []
-                assert matched_idxs is not None
-                for img_id in range(num_images):
-                    pos = torch.nonzero(labels[img_id] > 0).squeeze(1)
-                    keypoint_proposals.append(proposals[img_id][pos])
-                    pos_matched_idxs.append(matched_idxs[img_id][pos])
-            else:
-                pos_matched_idxs = None
-
-            keypoint_features = self.keypoint_roi_pool(features, keypoint_proposals, image_shapes)
-            keypoint_features = self.keypoint_head(keypoint_features)
-            keypoint_logits = self.keypoint_predictor(keypoint_features)
-
-            loss_keypoint = {}
-            if self.training:
-                assert targets is not None
-                assert pos_matched_idxs is not None
-
-                gt_keypoints = [t["keypoints"] for t in targets]
-                rcnn_loss_keypoint = keypointrcnn_loss(
-                    keypoint_logits, keypoint_proposals,
-                    gt_keypoints, pos_matched_idxs)
-                loss_keypoint = {
-                    "loss_keypoint": rcnn_loss_keypoint
-                }
-            else:
-                assert keypoint_logits is not None
-                assert keypoint_proposals is not None
-
-                keypoints_probs, kp_scores = keypointrcnn_inference(keypoint_logits, keypoint_proposals)
-                for keypoint_prob, kps, r in zip(keypoints_probs, kp_scores, result):
-                    r["keypoints"] = keypoint_prob
-                    r["keypoints_scores"] = kps
-
-            losses.update(loss_keypoint)
+                boxes, scores, labels = self.postprocess_detections(class_logits, box_regression,
+                                                                    proposals, image_shapes)
+                num_images = len(boxes)
+                for i in range(num_images):
+                    result.append(
+                        {
+                            "boxes": boxes[i],
+                            "labels": labels[i],
+                            "scores": scores[i],
+                        }
+                    )
 
         return result, losses
 
@@ -561,9 +560,7 @@ class FRCNN_Feature(FasterRCNN):
             box_predictor = FastRCNNPredictor(
                 representation_size,
                 num_classes)
-
-        roi_heads = RoIHeads(
-            # Box
+        roi_heads = RoIHeads(  # Box
             box_roi_pool, box_head, box_predictor,
             box_fg_iou_thresh, box_bg_iou_thresh,
             box_batch_size_per_image, box_positive_fraction,
@@ -575,8 +572,11 @@ class FRCNN_Feature(FasterRCNN):
         if image_std is None:
             image_std = [0.229, 0.224, 0.225]
         transform = GeneralizedRCNNTransform(min_size, max_size, image_mean, image_std)
-
+        self.ssm = False
         super(FasterRCNN, self).__init__(backbone, rpn, roi_heads, transform)
+
+    def ssm_mode(self, ssm):
+        self.ssm = ssm
 
     def forward(self, images, targets=None):
         # type: (List[Tensor], Optional[List[Dict[str, Tensor]]])
@@ -603,7 +603,8 @@ class FRCNN_Feature(FasterRCNN):
         if isinstance(features, torch.Tensor):
             features = OrderedDict([('0', features)])
         proposals, proposal_losses = self.rpn(images, features, targets)
-        detections, detector_losses = self.roi_heads(features, proposals, images.image_sizes, targets)
+        detections, detector_losses = self.roi_heads(features, proposals, images.image_sizes, self.ssm, targets)
+        # if not len(detections) == 0:
         detections = self.transform.postprocess(detections, images.image_sizes, original_image_sizes)
 
         losses = {}
@@ -627,7 +628,6 @@ def fasterrcnn_resnet50_fpn_feature(pretrained=False, progress=True,
     backbone = resnet_fpn_backbone('resnet50', pretrained_backbone)
     model = FRCNN_Feature(backbone, num_classes, **kwargs)
     if pretrained:
-        print(model_urls.keys())
         state_dict = load_state_dict_from_url(model_urls['fasterrcnn_resnet50_fpn_coco'],
                                               progress=progress)
         model.load_state_dict(state_dict)

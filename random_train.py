@@ -119,7 +119,6 @@ def main(args):
     indices = list(range(num_images))
     random.shuffle(indices)
     labeled_set = indices[:int(num_images * 0.1)]
-    print(labeled_set)
     unlabeled_set = indices[int(num_images * 0.1):]
     train_sampler = SubsetRandomSampler(labeled_set)
     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
@@ -158,15 +157,15 @@ def main(args):
             train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, args.print_freq)
             task_lr_scheduler.step()
             # evaluate after pre-set epoch
-            if (epoch + 1) == args.task_epochs or (epoch + 1) == args.total_epochs:
+            if (epoch + 1) == args.total_epochs:
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test)
         random.shuffle(unlabeled_set)
         # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += unlabeled_set[int(0.05 * num_images):]
-        unlabeled_set = unlabeled_set[:int(0.05 * num_images)]
+        labeled_set += unlabeled_set[:int(0.05 * num_images)]
+        unlabeled_set = unlabeled_set[int(0.05 * num_images):]
 
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
@@ -188,15 +187,15 @@ if __name__ == "__main__":
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
-    parser.add_argument('--task_epochs', default=15, type=int, metavar='N',
+    parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('--total_epochs', default=15, type=int, metavar='N',
+    parser.add_argument('--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--cycles', default=7, type=int, metavar='N',
                         help='number of cycles epochs to run')
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
-    parser.add_argument('--lr', default=0.005, type=float,
+    parser.add_argument('--lr', default=0.0025, type=float,
                         help='initial learning rate, 0.02 is the default value for training '
                              'on 8 gpus and 2 images_per_gpu')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
@@ -205,7 +204,7 @@ if __name__ == "__main__":
                         metavar='W', help='weight decay (default: 1e-4)',
                         dest='weight_decay')
     parser.add_argument('--lr-step-size', default=8, type=int, help='decrease lr every step-size epochs')
-    parser.add_argument('--lr-steps', default=[10], nargs='+', type=int, help='decrease lr every step-size epochs')
+    parser.add_argument('--lr-steps', default=[16, 19], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')
