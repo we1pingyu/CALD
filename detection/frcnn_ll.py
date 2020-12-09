@@ -95,7 +95,7 @@ class RoIHeads(_RoIHeads):
         all_boxes = torch.empty([0, 4]).cuda()
         all_scores = torch.tensor([]).cuda()
         all_labels = []
-        CONF_THRESH = 0.1  # bigger leads more active learning samples
+        CONF_THRESH = 0.5  # bigger leads more active learning samples
         for boxes, scores, image_shape in zip(pred_boxes, pred_scores, image_shapes):
             boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
             # create labels for each prediction

@@ -16,7 +16,7 @@ def get_uncertainty(task_model, unlabeled_loader):
     with torch.no_grad():
         for i, (images, labels) in enumerate(unlabeled_loader):
             images = list(img.cuda() for img in images)
-            _, dets = task_model(images)
+            dets = task_model(images)
             # only support batch_size=1 when testing
             boxes = dets[0]['boxes']
             scores = dets[0]['scores']
@@ -68,7 +68,7 @@ def image_cross_validation(model, curr_loader, labeled_sampler, pre_box, pre_cls
     for images, _ in curr_loader:
         curr_img = list(img.cuda() for img in images)[0]
     # crop proposal from image
-    unlabeled_patch = curr_img[:, int(pre_box[1]):int(pre_box[3]), int(pre_box[0]):int(pre_box[2])]
+    unlabeled_patch = curr_img[:, int(pre_box[0]):int(pre_box[2]), int(pre_box[1]):int(pre_box[3])]
     if unlabeled_patch.shape[1] <= 0 or unlabeled_patch.shape[2] <= 0:
         return False, 0
     for images, targets in labeled_sampler:
@@ -84,10 +84,9 @@ def image_cross_validation(model, curr_loader, labeled_sampler, pre_box, pre_cls
             start_x = random.randint(0, labeled_img.shape[2] - unlabeled_patch.shape[2])
             original_box = [start_x, start_y, start_x + unlabeled_patch.shape[2], start_y + unlabeled_patch.shape[1]]
             labeled_img[:, start_y:start_y + unlabeled_patch.shape[1], start_x:start_x + unlabeled_patch.shape[2]] \
-                = unlabeled_patch[:, 0:unlabeled_patch.shape[1], 0:unlabeled_patch.shape[2]]
+                = unlabeled_patch
             # redetect pasted_image
-            # curr_select += 1
-            _, dets = model([labeled_img])
+            dets = model([labeled_img])
             labels = dets[0]['labels']
             boxes = dets[0]['boxes'][labels == pre_cls]
             scores = dets[0]['scores'][labels == pre_cls]
@@ -98,13 +97,6 @@ def image_cross_validation(model, curr_loader, labeled_sampler, pre_box, pre_cls
             box = boxes[index]
             overlap_iou = calcu_iou(original_box, box)
             curr_select += 1
-            # print(score, overlap_iou)
-            if random.random() < 0.1:
-                # 从[0,1]转化为[0,255]，再从CHW转为HWC，最后转为cv2
-                fig = labeled_img.cpu().permute(1, 2, 0).type(torch.uint8).numpy()
-                fig = cv2.cvtColor(fig, cv2.COLOR_RGB2BGR)
-                cv2.rectangle(fig, (box[0], box[2]), (box[1], box[3]), (0, 255, 0), 2)
-                cv2.imwrite('vis/{}.jpg'.format(pre_cls), fig)
             if score > 0.5 and overlap_iou > 0.5:
                 cross_validation += 1
                 avg_score += score

@@ -35,7 +35,7 @@ from torch.utils.data import DataLoader
 import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from detection.frcnn_feature import fasterrcnn_resnet50_fpn_feature
+from detection.frcnn_ll import fasterrcnn_resnet50_fpn_feature
 from detection.coco_utils import get_coco, get_coco_kp
 from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from detection.engine import coco_evaluate, voc_evaluate
@@ -147,8 +147,12 @@ def main(args):
     # Data loading code
     print("Loading data")
 
-    dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
-    dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
+    if 'voc2007' in args.dataset:
+        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
+    else:
+        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
 
     print("Creating data loaders")
     num_images = len(dataset)

@@ -58,7 +58,7 @@ class VOCDetection(torchvision.datasets.VOCDetection):
         return img, target
 
 
-def get_voc(root, image_set, transforms):
+def get_voc2012(root, image_set, transforms):
     t = [ConvertVOCtoCOCO()]
 
     if transforms is not None:
@@ -66,5 +66,17 @@ def get_voc(root, image_set, transforms):
     transforms = T.Compose(t)
 
     dataset = VOCDetection(img_folder=root, year='2012', image_set=image_set, transforms=transforms)
+
+    return dataset
+
+
+def get_voc2007(root, image_set, transforms):
+    t = [ConvertVOCtoCOCO()]
+
+    if transforms is not None:
+        t.append(transforms)
+    transforms = T.Compose(t)
+
+    dataset = VOCDetection(img_folder=root, year='2007', image_set=image_set, transforms=transforms)
 
     return dataset

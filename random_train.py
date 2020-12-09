@@ -35,7 +35,6 @@ from torch.utils.data import DataLoader
 import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from detection.frcnn_feature import fasterrcnn_resnet50_fpn_feature
 from detection.coco_utils import get_coco, get_coco_kp
 from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from detection.engine import coco_evaluate, voc_evaluate
@@ -63,7 +62,7 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        features, task_loss_dict = task_model(images, targets)
+        task_loss_dict = task_model(images, targets)
         task_loss_dict['loss_objectness'] = torch.mean(task_loss_dict['loss_objectness'])
         task_loss_dict['loss_rpn_box_reg'] = torch.mean(task_loss_dict['loss_rpn_box_reg'])
         task_loss_dict['loss_classifier'] = torch.mean(task_loss_dict['loss_classifier'])
@@ -73,12 +72,6 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
         task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
         task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
         task_loss_value = task_losses_reduced.item()
-        if epoch > args.task_epochs:
-            # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
-            features['0'] = features['0'].detach()
-            features['1'] = features['1'].detach()
-            features['2'] = features['2'].detach()
-            features['3'] = features['3'].detach()
         losses = task_losses
         if not math.isfinite(task_loss_value):
             print("Loss is {}, stopping training".format(task_loss_value))
@@ -97,11 +90,10 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
 
 def main(args):
     torch.cuda.set_device(0)
-    random.seed(0)
+    random.seed('ywp')
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    # torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = True
     utils.init_distributed_mode(args)
     print(args)
@@ -111,8 +103,12 @@ def main(args):
     # Data loading code
     print("Loading data")
 
-    dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
-    dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
+    if 'voc2007' in args.dataset:
+        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
+    else:
+        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
 
     print("Creating data loaders")
     num_images = len(dataset)
@@ -135,15 +131,13 @@ def main(args):
                                                   collate_fn=utils.collate_fn)
 
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+        task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
                                                                  gamma=args.lr_gamma)
-        # ll_model = lossnet._LossNet()
-        # ll_model.to(device)
         # Start active learning cycles training
         if args.test_only:
             if 'coco' in args.dataset:
@@ -161,7 +155,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test)
+                    voc_evaluate(task_model, data_loader_test, cycle)
         random.shuffle(unlabeled_set)
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += unlabeled_set[:int(0.05 * num_images)]
@@ -170,9 +164,9 @@ def main(args):
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
 
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+        total_time = time.time() - start_time
+        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+        print('Training time {}'.format(total_time_str))
 
 
 if __name__ == "__main__":
@@ -181,15 +175,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/data/yuweiping/coco/', help='dataset')
-    parser.add_argument('--dataset', default='coco', help='dataset')
+    parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
+    parser.add_argument('--dataset', default='voc', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('--total_epochs', default=20, type=int, metavar='N',
+    parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--cycles', default=7, type=int, metavar='N',
                         help='number of cycles epochs to run')

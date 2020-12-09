@@ -5,6 +5,7 @@ import torch
 import itertools
 from terminaltables import AsciiTable
 import numpy as np
+import cv2
 from mmcv.utils import print_log
 
 import torchvision.models.detection.mask_rcnn
@@ -72,6 +73,15 @@ def _get_iou_types(model):
     return iou_types
 
 
+VOC_CLASSES = (
+    "aeroplane", "bicycle",
+    "bird", "boat", "bottle", "bus", "car",
+    "cat", "chair", "cow", "diningtable", "dog",
+    "horse", "motorbike", "person", "pottedplant",
+    "sheep", "sofa", "train", "tvmonitor",
+)
+
+
 @torch.no_grad()
 def voc_evaluate(model, data_loader):
     device = 'cuda'
@@ -84,13 +94,13 @@ def voc_evaluate(model, data_loader):
 
     all_boxes = [[] for i in range(21)]
     image_index = []
+    c = 0
     for image, targets in metric_logger.log_every(data_loader, 5000, header):
         image = list(img.to(device) for img in image)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         torch.cuda.synchronize()
-        model_time = time.time()
-        _, outputs = model(image)
+        outputs = model(image)
 
         name = ''.join([chr(i) for i in targets[0]['name'].tolist()])
         image_index.append(name)
@@ -101,7 +111,22 @@ def voc_evaluate(model, data_loader):
         for o in outputs:
             for i in range(o['boxes'].shape[0]):
                 image_boxes[o['labels'][i]].extend([torch.cat([o['boxes'][i], o['scores'][i].unsqueeze(0)], dim=0)])
-
+        # if cycle == 0:
+        #     for img, label, out in zip(image, targets, outputs):
+        #         img = (img * 255).permute(1, 2, 0).type(torch.uint8).cpu().numpy()
+        #         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        #         for b, l in zip(label['boxes'], label['labels']):
+        #             cv2.rectangle(img, (b[0], b[1]), (b[2], b[3]), (0, 255, 0))
+        #             cv2.putText(img, VOC_CLASSES[l - 1], (b[0], b[1] + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+        #                         color=(0, 255, 0), thickness=1)
+        #         for b, l, s in zip(out['boxes'], out['labels'], out['scores']):
+        #             if s > 0.3:
+        #                 cv2.rectangle(img, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (0, 0, 255))
+        #                 cv2.putText(img, VOC_CLASSES[l - 1] + ':' + str(np.round(s.item(), 2)),
+        #                             (int(b[0]), int(b[3] - 2)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color=(0, 0, 255),
+        #                             thickness=1)
+        #     cv2.imwrite('/data/yuweiping/vis_voc_cycle_1/{}.jpg'.format(i), img)
+        #     c += 1
         # makes sure that the all_boxes is filled with empty array when
         # there are no boxes in image_boxes
         for i in range(21):
@@ -109,9 +134,6 @@ def voc_evaluate(model, data_loader):
                 all_boxes[i].append([torch.stack(image_boxes[i])])
             else:
                 all_boxes[i].append([])
-
-        model_time = time.time() - model_time
-
     metric_logger.synchronize_between_processes()
 
     all_boxes_gathered = utils.all_gather(all_boxes)
@@ -132,20 +154,20 @@ def voc_evaluate(model, data_loader):
     torch.set_num_threads(n_threads)
 
 
-CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-           'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
-           'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
-           'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
-           'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-           'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
-           'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-           'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-           'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
-           'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-           'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
-           'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
-           'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
-           'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush')
+COCO_CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+                'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
+                'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
+                'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+                'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
+                'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+                'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
+                'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
+                'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+                'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+                'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+                'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
+                'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush')
 
 
 @torch.no_grad()
@@ -186,7 +208,7 @@ def coco_evaluate(model, data_loader, classwise=True):
     coco_evaluator.accumulate()
     coco_evaluator.summarize()
 
-    cat_ids = coco.get_cat_ids(cat_names=CLASSES)
+    cat_ids = coco.get_cat_ids(cat_names=COCO_CLASSES)
     if classwise:  # Compute per-category AP
         # Compute per-category AP
         # from https://github.com/facebookresearch/detectron2/

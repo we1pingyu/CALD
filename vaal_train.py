@@ -19,55 +19,60 @@ the number of epochs should be adapted so that we have the same number of iterat
 """
 import datetime
 import os
-import time
 import random
-import math
 import sys
+import time
 import numpy as np
-
+import math
 import torch
+import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 import torch.utils.data
-from torch import nn
 import torchvision
 import torchvision.models.detection
 import torchvision.models.detection.mask_rcnn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-import torch.optim.lr_scheduler as lr_scheduler
-from torch.utils.data.sampler import SubsetRandomSampler
-
-from detection.frcnn_ssm import fasterrcnn_resnet50_fpn_ssm
-from detection.coco_utils import get_coco, get_coco_kp
-from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
-from detection.engine import coco_evaluate, voc_evaluate
-from detection import utils
 from detection import transforms as T
+from detection import utils
+from detection.coco_utils import get_coco, get_coco_kp
+from detection.engine import coco_evaluate, voc_evaluate
+from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from detection.train import *
-
 from ll4al.data.sampler import SubsetSequentialSampler
+from torch import nn
+from torch.utils.data import DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
+from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
+from vaal.vaal_helper import *
 
-from ssm.ssm_helper import *
 
-import warnings
+def train_one_epoch(task_model, task_optimizer, vae, vae_optimizer, discriminator, discriminator_optimizer,
+                    labeled_dataloader, unlabeled_dataloader, device, cycle, epoch, print_freq):
+    def read_unlabeled_data(dataloader):
+        while True:
+            for images, _ in dataloader:
+                yield list(image.to(device) for image in images)
 
-warnings.filterwarnings("ignore")
-
-
-def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
+    labeled_data = read_unlabeled_data(labeled_dataloader)
+    unlabeled_data = read_unlabeled_data(unlabeled_dataloader)
     task_model.train()
+    vae.train()
+    discriminator.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('task_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Cycle:[{}] Epoch: [{}]'.format(cycle, epoch)
 
     task_lr_scheduler = None
-
+    vae_lr_scheduler = None
+    discriminator_lr_scheduler = None
     if epoch == 0:
         warmup_factor = 1. / 1000
-        warmup_iters = min(1000, len(data_loader) - 1)
+        warmup_iters = min(1000, len(labeled_dataloader) - 1)
 
         task_lr_scheduler = utils.warmup_lr_scheduler(task_optimizer, warmup_iters, warmup_factor)
+        vae_lr_scheduler = utils.warmup_lr_scheduler(vae_optimizer, warmup_iters, warmup_factor)
+        discriminator_lr_scheduler = utils.warmup_lr_scheduler(discriminator_optimizer, warmup_iters, warmup_factor)
 
-    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
+    for images, targets in metric_logger.log_every(labeled_dataloader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -80,8 +85,8 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
         losses = task_losses
         if not math.isfinite(task_loss_value):
             print("Loss is {}, stopping training".format(task_loss_value))
+            print(task_loss_dict_reduced)
             sys.exit(1)
-
         task_optimizer.zero_grad()
         losses.backward()
         task_optimizer.step()
@@ -89,14 +94,52 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
             task_lr_scheduler.step()
         metric_logger.update(task_loss=task_losses_reduced)
         metric_logger.update(task_lr=task_optimizer.param_groups[0]["lr"])
+
+    for i in range(5 * len(labeled_dataloader)):
+        unlabeled_imgs = next(unlabeled_data)
+        labeled_imgs = next(labeled_data)
+        recon, z, mu, logvar = vae(labeled_imgs)
+        unsup_loss = vae_loss(labeled_imgs, recon, mu, logvar, 1)
+        unlab_recon, unlab_z, unlab_mu, unlab_logvar = vae(unlabeled_imgs)
+        transductive_loss = vae_loss(unlabeled_imgs, unlab_recon, unlab_mu, unlab_logvar, 1)
+
+        labeled_preds = discriminator(mu)
+        unlabeled_preds = discriminator(unlab_mu)
+
+        lab_real_preds = torch.ones(len(labeled_imgs)).cuda()
+        unlab_real_preds = torch.ones(len(unlabeled_imgs)).cuda()
+
+        dsc_loss = bce_loss(labeled_preds, lab_real_preds) + bce_loss(unlabeled_preds, unlab_real_preds)
+        total_vae_loss = unsup_loss + transductive_loss + dsc_loss
+        vae_optimizer.zero_grad()
+        total_vae_loss.backward()
+        vae_optimizer.step()
+
+        # Discriminator step
+        with torch.no_grad():
+            _, _, mu, _ = vae(labeled_imgs)
+            _, _, unlab_mu, _ = vae(unlabeled_imgs)
+
+        labeled_preds = discriminator(mu)
+        unlabeled_preds = discriminator(unlab_mu)
+
+        lab_real_preds = torch.ones(len(labeled_imgs)).cuda()
+        unlab_fake_preds = torch.zeros(len(unlabeled_imgs)).cuda()
+
+        dsc_loss = bce_loss(labeled_preds, lab_real_preds) + bce_loss(unlabeled_preds, unlab_fake_preds)
+
+        discriminator_optimizer.zero_grad()
+        dsc_loss.backward()
+        discriminator_optimizer.step()
+
+        if vae_lr_scheduler is not None:
+            vae_lr_scheduler.step()
+        if discriminator_lr_scheduler is not None:
+            discriminator_lr_scheduler.step()
+        if i == len(labeled_dataloader) - 1:
+            print('vae_loss: {} dis_loss:{}'.format(total_vae_loss, dsc_loss))
+
     return metric_logger
-
-
-def softmax(ary):
-    ary = ary.flatten()
-    expa = np.exp(ary)
-    dom = np.sum(expa)
-    return expa / dom
 
 
 def main(args):
@@ -127,32 +170,49 @@ def main(args):
     labeled_set = indices[:int(num_images * 0.1)]
     unlabeled_set = indices[int(num_images * 0.1):]
     train_sampler = SubsetRandomSampler(labeled_set)
+    unlabeled_sampler = SubsetRandomSampler(unlabeled_set)
     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers,
                                   collate_fn=utils.collate_fn)
-
-    # SSM parameters
-    gamma = 0.15
-    clslambda = np.array([-np.log(0.9)] * (num_classes - 1))
-    # Start active learning cycles training
     for cycle in range(args.cycles):
         if args.aspect_ratio_group_factor >= 0:
             group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
             train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
+            unlabeled_batch_sampler = GroupedBatchSampler(unlabeled_sampler, group_ids, args.batch_size)
         else:
             train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
-
+            unlabeled_batch_sampler = torch.utils.data.BatchSampler(unlabeled_sampler, args.batch_size, drop_last=True)
         data_loader = torch.utils.data.DataLoader(dataset, batch_sampler=train_batch_sampler, num_workers=args.workers,
                                                   collate_fn=utils.collate_fn)
-
+        unlabeled_dataloader = torch.utils.data.DataLoader(dataset, batch_sampler=unlabeled_batch_sampler,
+                                                           num_workers=args.workers,
+                                                           collate_fn=utils.collate_fn)
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=600, max_size=1000)
+        task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
                                                                  gamma=args.lr_gamma)
+        vae = VAE()
+        params = [p for p in vae.parameters() if p.requires_grad]
+        vae_optimizer = torch.optim.SGD(params, lr=args.lr / 10, momentum=args.momentum,
+                                        weight_decay=args.weight_decay)
+        vae_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(vae_optimizer, milestones=args.lr_steps,
+                                                                gamma=args.lr_gamma)
+        torch.nn.utils.clip_grad_value_(vae.parameters(), 1e5)
+
+        vae.to(device)
+        discriminator = Discriminator()
+        params = [p for p in discriminator.parameters() if p.requires_grad]
+        discriminator_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum,
+                                                  weight_decay=args.weight_decay)
+        discriminator_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(discriminator_optimizer,
+                                                                          milestones=args.lr_steps,
+                                                                          gamma=args.lr_gamma)
+        discriminator.to(device)
+        # Start active learning cycles training
         if args.test_only:
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
@@ -162,85 +222,27 @@ def main(args):
         print("Start training")
         start_time = time.time()
         for epoch in range(args.start_epoch, args.total_epochs):
-            train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, args.print_freq)
+            train_one_epoch(task_model, task_optimizer, vae, vae_optimizer, discriminator, discriminator_optimizer,
+                            data_loader, unlabeled_dataloader, device, cycle, epoch, args.print_freq)
             task_lr_scheduler.step()
+            vae_lr_scheduler.step()
+            discriminator_lr_scheduler.step()
             # evaluate after pre-set epoch
             if (epoch + 1) == args.total_epochs:
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test)
-        unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(unlabeled_set),
-                                      num_workers=args.workers,
-                                      # more convenient if we maintain the order of subset
-                                      pin_memory=True, collate_fn=utils.collate_fn)
-        print("Getting detections from unlabeled set")
-        allScore, allBox, allY, al_idx = get_uncertainty(task_model, unlabeled_loader)
-        al_idx = [unlabeled_set[i] for i in al_idx]
-        unlabeled_set = list(set(unlabeled_set) - set(al_idx))
-        cls_sum = 0
-        cls_loss_sum = np.zeros((num_classes - 1,))
-        print("First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
-        if len(al_idx) >= 0.05 * num_images:
-            al_idx = al_idx[:int(0.05 * num_images)]
-            labeled_set += al_idx
-            unlabeled_set = list(set(unlabeled_set) - set(al_idx))
-            print(
-                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
-            # Create a new dataloader for the updated labeled dataset
-            train_sampler = SubsetRandomSampler(labeled_set)
-            clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
-            gamma = min(gamma + 0.05, 1)
-            continue
-        print("Image cross validation")
-        for i in range(len(unlabeled_set)):
-            if len(al_idx) >= int(0.05 * num_images):
-                break
-            cls_sum += len(allBox[i])
-            for j, box in enumerate(allBox[i]):
-                if len(al_idx) >= int(0.05 * num_images):
-                    break
-                score = allScore[i][j]
-                label = torch.tensor(allY[i][j]).cuda()
-                loss = -((1 + label.cpu().numpy()) / 2 * np.log(score.cpu().numpy()) + (
-                        1 - label.cpu().numpy()) / 2 * np.log(1 - score.cpu().numpy() + 1e-30))
-                cls_loss_sum += loss
-                v, v_val = judge_uv(loss, gamma, clslambda)
-                if v:
-                    if torch.sum(label == 1) == 1 and torch.where(label == 1)[0] != 0:
-                        # add Imgae Cross Validation
-                        pre_cls = torch.where(label == 1)[0]
-                        pre_box = box
-                        curr_ind = [unlabeled_set[i]]
-                        curr_sampler = SubsetSequentialSampler(curr_ind)
-                        curr_loader = DataLoader(dataset, batch_size=1, sampler=curr_sampler,
-                                                 num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-                        labeled_sampler = SubsetRandomSampler(labeled_set)
-                        labeled_loader = DataLoader(dataset, batch_size=1, sampler=labeled_sampler,
-                                                    num_workers=args.workers, pin_memory=True,
-                                                    collate_fn=utils.collate_fn)
-                        cross_validate, avg_score = image_cross_validation(
-                            task_model, curr_loader, labeled_loader, pre_box, pre_cls)
-                        if not cross_validate:
-                            al_idx.append(unlabeled_set[i])
-                            break
-                else:
-                    al_idx.append(unlabeled_set[i])
-                    break
         # Update the labeled dataset and the unlabeled dataset, respectively
-        print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
-        if len(al_idx) > int(0.05 * num_images):
-            al_idx = al_idx[:int(0.05 * num_images)]
-        if len(al_idx) < (0.05 * num_images):
-            al_idx += list(set(unlabeled_set) - set(al_idx))[:int(0.05 * num_images) - len(al_idx)]
-        labeled_set += al_idx
-        unlabeled_set = list(set(unlabeled_set) - set(al_idx))
-        print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
+        unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(unlabeled_set),
+                                      num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+        tobe_labeled_inds = sample_for_labeling(vae, discriminator, unlabeled_loader, num_images)
+        tobe_labeled_set = [unlabeled_set[i] for i in tobe_labeled_inds]
+        labeled_set += tobe_labeled_set
+        unlabeled_set = list(set(unlabeled_set) - set(tobe_labeled_set))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
-        clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
-        gamma = min(gamma + 0.05, 1)
-
+        unlabeled_sampler = SubsetRandomSampler(unlabeled_set)
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('Training time {}'.format(total_time_str))
@@ -258,9 +260,9 @@ if __name__ == "__main__":
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
-    parser.add_argument('--task-epochs', default=20, type=int, metavar='N',
+    parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('-e', '--total-epochs', default=20, type=int, metavar='N',
+    parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--cycles', default=7, type=int, metavar='N',
                         help='number of cycles epochs to run')
@@ -269,8 +271,6 @@ if __name__ == "__main__":
     parser.add_argument('--lr', default=0.0025, type=float,
                         help='initial learning rate, 0.02 is the default value for training '
                              'on 8 gpus and 2 images_per_gpu')
-    parser.add_argument('--ll-weight', default=0.5, type=float,
-                        help='ll loss weight')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                         help='momentum')
     parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
