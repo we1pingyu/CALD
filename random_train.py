@@ -63,10 +63,6 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         task_loss_dict = task_model(images, targets)
-        task_loss_dict['loss_objectness'] = torch.mean(task_loss_dict['loss_objectness'])
-        task_loss_dict['loss_rpn_box_reg'] = torch.mean(task_loss_dict['loss_rpn_box_reg'])
-        task_loss_dict['loss_classifier'] = torch.mean(task_loss_dict['loss_classifier'])
-        task_loss_dict['loss_box_reg'] = torch.mean(task_loss_dict['loss_box_reg'])
         task_losses = sum(loss for loss in task_loss_dict.values())
         # reduce losses over all GPUs for logging purposes
         task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)

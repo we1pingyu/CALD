@@ -222,11 +222,17 @@ def _write_voc_results_file(all_boxes, image_index, root, classes):
                                    dets[k, 2] + 1, dets[k, 3] + 1))
 
 
-def _do_python_eval(data_loader):
-    imagesetfile = os.path.join(data_loader.dataset.root,
-                                'VOCdevkit/VOC2012/ImageSets/Main/' + data_loader.dataset.image_set + '.txt')
-    annopath = os.path.join(data_loader.dataset.root,
-                            'VOCdevkit/VOC2012/Annotations/{:s}.xml')
+def _do_python_eval(data_loader, year):
+    if '2012' in year:
+        imagesetfile = os.path.join(data_loader.dataset.root,
+                                    'VOCdevkit/VOC2012/ImageSets/Main/' + data_loader.dataset.image_set + '.txt')
+        annopath = os.path.join(data_loader.dataset.root,
+                                'VOCdevkit/VOC2012/Annotations/{:s}.xml')
+    if '2007' in year:
+        imagesetfile = os.path.join(data_loader.dataset.root,
+                                    'VOCdevkit/VOC2007/ImageSets/Main/' + data_loader.dataset.image_set + '.txt')
+        annopath = os.path.join(data_loader.dataset.root,
+                                'VOCdevkit/VOC2007/Annotations/{:s}.xml')
 
     classes = data_loader.dataset._transforms.transforms[0].CLASSES
     ap_cls = []
@@ -248,10 +254,10 @@ def _do_python_eval(data_loader):
             rec_iou.append(rec)
             if iou == 0.5:
                 ap_50.append(ap)
+                ap_cls.append(ap)
+                rec_cls.append(rec)
             if iou == 0.75:
                 ap_75.append(ap)
-        ap_cls.append(np.mean(ap_iou))
-        rec_cls.append(np.mean(rec_iou))
 
     print('=====================================================================================================')
     print('{}|{}|{}|{}'.format(round(np.mean(ap_cls) * 100, 1), round(np.mean(ap_50) * 100, 1),

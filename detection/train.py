@@ -29,7 +29,7 @@ import torchvision.models.detection
 import torchvision.models.detection.mask_rcnn
 
 from .coco_utils import get_coco, get_coco_kp
-from .voc_utils import get_voc
+from .voc_utils import get_voc2007, get_voc2012
 from .group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from .engine import train_one_epoch
 from .engine import coco_evaluate as evaluate
