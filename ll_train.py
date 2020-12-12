@@ -194,7 +194,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test, args.dataset)
+                voc_evaluate(task_model, data_loader_test, args.dataset, True)
             return
         print("Start training")
         start_time = time.time()
@@ -208,7 +208,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, True)
         random.shuffle(unlabeled_set)
         subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset, batch_size=args.batch_size,

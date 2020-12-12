@@ -83,7 +83,7 @@ VOC_CLASSES = (
 
 
 @torch.no_grad()
-def voc_evaluate(model, data_loader, year):
+def voc_evaluate(model, data_loader, year, feature=False):
     device = 'cuda'
     n_threads = torch.get_num_threads()
     torch.set_num_threads(1)
@@ -100,7 +100,10 @@ def voc_evaluate(model, data_loader, year):
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         torch.cuda.synchronize()
-        outputs = model(image)
+        if feature:
+            _, outputs = model(image)
+        else:
+            outputs = model(image)
 
         name = ''.join([chr(i) for i in targets[0]['name'].tolist()])
         image_index.append(name)
