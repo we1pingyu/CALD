@@ -106,18 +106,51 @@ def get_uncertainty(task_model, unlabeled_loader):
     uncertainties = []
 
     with torch.no_grad():
+        stabilities = []
         for images, labels in unlabeled_loader:
             images = list(img.cuda() for img in images)
             torch.cuda.synchronize()
-            outputs = task_model(images)
-            for output in outputs:
-                uncertainty = 1.0
-                for box, prop, score in zip(output['boxes'], output['props'], output['scores']):
-                    iou = calcu_iou(box, prop)
-                    u = torch.abs(iou + score - 1)
-                    uncertainty = min(uncertainty, u.cpu().numpy())
-                uncertainties.append(uncertainty)
-    return uncertainties
+            # only support 1 batch size
+            for image in images:
+                gaussian_images = [image]
+                for n in range(1, 7):
+                    x = image + torch.randn(image.size()).cuda() * (n * 8) / 255.0
+                    gaussian_images.append(x)
+                outputs = task_model(gaussian_images)
+                if outputs[0]['boxes'].shape[0] == 0:
+                    stabilities.append(0.0)
+                    break
+                corresponding_boxes_average = torch.empty([0, outputs[0]['boxes'].shape[0]]).cuda()
+                for i, output in enumerate(outputs):
+                    if i == 0:
+                        reference_boxes, reference_scores = output['boxes'], output['scores']
+                    else:
+                        boxes = output['boxes']
+                        if boxes.shape[0] == 0:
+                            corresponding_boxes_average = torch.cat(
+                                (corresponding_boxes_average, torch.zeros([1, outputs[0]['boxes'].shape[0]]).cuda()))
+                            continue
+                        corresponding_boxes_single = torch.tensor([]).cuda()
+                        for reference_box in reference_boxes:
+                            width = torch.min(reference_box[2], boxes[:, 2]) - torch.max(reference_box[0],
+                                                                                         boxes[:, 0])
+                            height = torch.min(reference_box[3], boxes[:, 3]) - torch.max(reference_box[1],
+                                                                                          boxes[:, 1])
+                            Aarea = (reference_box[2] - reference_box[0]) * (reference_box[3] - reference_box[1])
+                            Barea = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                            iner_area = width * height
+                            iou = iner_area / (Aarea + Barea - iner_area)
+                            iou[width < 0] = 0.0
+                            iou[height < 0] = 0.0
+                            corresponding_boxes_single = torch.cat(
+                                (corresponding_boxes_single, torch.max(iou).reshape(1)))
+                        corresponding_boxes_average = torch.cat(
+                            (corresponding_boxes_average, corresponding_boxes_single.unsqueeze(0)))
+                corresponding_boxes_average = torch.mean(corresponding_boxes_average, 0)
+                stability = torch.sum(corresponding_boxes_average * reference_scores) / torch.sum(
+                    reference_scores)
+                stabilities.append(stability.cpu().item())
+    return stabilities
 
 
 def main(args):
@@ -195,6 +228,7 @@ def main(args):
                                       sampler=SubsetSequentialSampler(subset), num_workers=args.workers,
                                       # more convenient if we maintain the order of subset
                                       pin_memory=True, collate_fn=utils.collate_fn)
+        print("Getting stability")
         uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
 

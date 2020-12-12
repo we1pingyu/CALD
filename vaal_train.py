@@ -157,7 +157,7 @@ def main(args):
     # Data loading code
     print("Loading data")
     if 'voc2007' in args.dataset:
-        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset, num_classes = get_dataset(args.dataset, "trainval", get_transform(train=True), args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
     else:
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
@@ -217,7 +217,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test)
+                voc_evaluate(task_model, data_loader_test, args.dataset)
             return
         print("Start training")
         start_time = time.time()
@@ -232,7 +232,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test)
+                    voc_evaluate(task_model, data_loader_test, args.dataset)
         # Update the labeled dataset and the unlabeled dataset, respectively
         unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(unlabeled_set),
                                       num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
@@ -255,7 +255,7 @@ if __name__ == "__main__":
         description=__doc__)
 
     parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
-    parser.add_argument('--dataset', default='voc', help='dataset')
+    parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,

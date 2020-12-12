@@ -84,12 +84,12 @@ def train_one_epoch(task_model, task_optimizer, ll_model, ll_optimizer, data_loa
         task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
         task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
         task_loss_value = task_losses_reduced.item()
-        if epoch > args.task_epochs:
-            # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
-            features['0'] = features['0'].detach()
-            features['1'] = features['1'].detach()
-            features['2'] = features['2'].detach()
-            features['3'] = features['3'].detach()
+        # if epoch > args.task_epochs:
+        # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
+        features['0'] = features['0'].detach()
+        features['1'] = features['1'].detach()
+        features['2'] = features['2'].detach()
+        features['3'] = features['3'].detach()
         ll_pred = ll_model(features).cuda()
         ll_pred = ll_pred.view(ll_pred.size(0))
         ll_loss = args.ll_weight * LossPredLoss(ll_pred, _task_losses, margin=MARGIN)
@@ -148,7 +148,7 @@ def main(args):
     print("Loading data")
 
     if 'voc2007' in args.dataset:
-        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset, num_classes = get_dataset(args.dataset, "trainval", get_transform(train=True), args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
     else:
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
@@ -194,7 +194,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test)
+                voc_evaluate(task_model, data_loader_test, args.dataset)
             return
         print("Start training")
         start_time = time.time()
@@ -208,7 +208,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test)
+                    voc_evaluate(task_model, data_loader_test, args.dataset)
         random.shuffle(unlabeled_set)
         subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset, batch_size=args.batch_size,
@@ -242,7 +242,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
-    parser.add_argument('--task_epochs', default=15, type=int, metavar='N',
+    parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
@@ -261,7 +261,7 @@ if __name__ == "__main__":
                         metavar='W', help='weight decay (default: 1e-4)',
                         dest='weight_decay')
     parser.add_argument('--lr-step-size', default=8, type=int, help='decrease lr every step-size epochs')
-    parser.add_argument('--lr-steps', default=[10], nargs='+', type=int, help='decrease lr every step-size epochs')
+    parser.add_argument('--lr-steps', default=[16, 19], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')

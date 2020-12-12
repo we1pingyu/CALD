@@ -239,28 +239,26 @@ def _do_python_eval(data_loader, year):
     rec_cls = []
     ap_75 = []
     ap_50 = []
+    ap_iou = []
     for cls in classes:
         if cls == '__background__':
             continue
         filename = '/tmp/results/det_test_{:s}.txt'.format(cls)
-        ap_iou = []
-        rec_iou = []
         for iou in [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]:
             rec, prec, ap = voc_eval(cls, filename, imagesetfile, annopath,
                                      ovthresh=iou)
             if len(rec) == 0:
                 rec = 0.
             ap_iou.append(ap)
-            rec_iou.append(rec)
             if iou == 0.5:
                 ap_50.append(ap)
                 ap_cls.append(ap)
-                rec_cls.append(rec)
+                rec_cls.append(np.mean(rec))
             if iou == 0.75:
                 ap_75.append(ap)
 
     print('=====================================================================================================')
-    print('{}|{}|{}|{}'.format(round(np.mean(ap_cls) * 100, 1), round(np.mean(ap_50) * 100, 1),
+    print('{}|{}|{}|{}'.format(round(np.mean(ap_iou) * 100, 1), round(np.mean(ap_50) * 100, 1),
                                round(np.mean(ap_75) * 100, 1), round(np.mean(rec_cls) * 100, 1)), end='')
     for ap in ap_cls:
         print('|{}'.format(round(ap * 100, 1)), end='')
