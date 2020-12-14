@@ -37,7 +37,6 @@ class RoIHeads(_RoIHeads):
         pred_boxes = self.box_coder.decode(box_regression, proposals)
 
         pred_scores = F.softmax(class_logits, -1)
-
         # split boxes and scores per image
         pred_boxes = pred_boxes.split(boxes_per_image, 0)
         pred_scores = pred_scores.split(boxes_per_image, 0)
@@ -46,38 +45,44 @@ class RoIHeads(_RoIHeads):
         all_scores = []
         all_labels = []
         all_props = []
+        all_prob_max = []
         for boxes, scores, props, image_shape in zip(pred_boxes, pred_scores, proposals, image_shapes):
             boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
 
             # create labels for each prediction
             labels = torch.arange(num_classes, device=device)
             labels = labels.view(1, -1).expand_as(scores)
-
             # remove predictions with the background label
             boxes = boxes[:, 1:]
             scores = scores[:, 1:]
             labels = labels[:, 1:]
             props = props.unsqueeze(1).expand(props.shape[0], boxes.shape[1], props.shape[1])
             # batch everything, by making every class prediction be a separate instance
+            prob_max = torch.max(scores, 1)[0]
+            prob_max = prob_max.unsqueeze(1).expand(prob_max.shape[0], boxes.shape[1])
             boxes = boxes.reshape(-1, 4)
             scores = scores.flatten()
+            prob_max = prob_max.flatten()
             labels = labels.flatten()
             props = props.reshape(-1, 4)
             # remove low scoring boxes
             inds = torch.nonzero(scores > self.score_thresh).squeeze(1)
-            boxes, scores, labels, props = boxes[inds], scores[inds], labels[inds], props[inds]
+            boxes, scores, labels, props, prob_max = boxes[inds], scores[inds], labels[inds], props[inds], prob_max[
+                inds]
 
             # non-maximum suppression, independently done per class
             keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
             # keep only topk scoring predictions
             keep = keep[:self.detections_per_img]
-            boxes, scores, labels, props = boxes[keep], scores[keep], labels[keep], props[keep]
+            boxes, scores, labels, props, prob_max = \
+                boxes[keep], scores[keep], labels[keep], props[keep], prob_max[keep]
 
             all_boxes.append(boxes)
             all_scores.append(scores)
             all_labels.append(labels)
             all_props.append(props)
-        return all_boxes, all_scores, all_labels, all_props
+            all_prob_max.append(prob_max)
+        return all_boxes, all_scores, all_labels, all_props, all_prob_max
 
     def forward(self, features, proposals, image_shapes, targets=None):
         # type: (Dict[str, Tensor], List[Tensor], List[Tuple[int, int]], Optional[List[Dict[str, Tensor]]])
@@ -116,8 +121,8 @@ class RoIHeads(_RoIHeads):
                 "loss_box_reg": loss_box_reg
             }
         else:
-            boxes, scores, labels, props = self.postprocess_detections(class_logits, box_regression,
-                                                                       proposals, image_shapes)
+            boxes, scores, labels, props, prob_max = self.postprocess_detections(class_logits, box_regression,
+                                                                                 proposals, image_shapes)
             num_images = len(boxes)
             for i in range(num_images):
                 result.append(
@@ -125,7 +130,8 @@ class RoIHeads(_RoIHeads):
                         "boxes": boxes[i],
                         "labels": labels[i],
                         "scores": scores[i],
-                        "props": props[i]
+                        "props": props[i],
+                        "prob_max": prob_max[i]
                     }
                 )
 

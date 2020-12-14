@@ -123,7 +123,9 @@ def get_uncertainty(task_model, unlabeled_loader):
                 corresponding_boxes_average = torch.empty([0, outputs[0]['boxes'].shape[0]]).cuda()
                 for i, output in enumerate(outputs):
                     if i == 0:
-                        reference_boxes, reference_scores = output['boxes'], output['scores']
+                        reference_boxes, reference_scores, prob_max = output['boxes'], output['scores'], output[
+                            'prob_max']
+                        P = torch.max(1 - prob_max)
                     else:
                         boxes = output['boxes']
                         if boxes.shape[0] == 0:
@@ -147,9 +149,8 @@ def get_uncertainty(task_model, unlabeled_loader):
                         corresponding_boxes_average = torch.cat(
                             (corresponding_boxes_average, corresponding_boxes_single.unsqueeze(0)))
                 corresponding_boxes_average = torch.mean(corresponding_boxes_average, 0)
-                stability = torch.sum(corresponding_boxes_average * reference_scores) / torch.sum(
-                    reference_scores)
-                stabilities.append(stability.cpu().item())
+                stability = torch.sum(corresponding_boxes_average * prob_max) / torch.sum(prob_max)
+                stabilities.append((P - stability.cpu().item()) * -1)
     return stabilities
 
 

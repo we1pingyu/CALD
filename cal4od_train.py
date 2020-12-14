@@ -120,13 +120,19 @@ def get_uncertainty(task_model, unlabeled_loader):
                 corresponding_boxes_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
 
                 # start augment
-                flip_image, flip_boxes = HorizontalFlip(image, reference_boxes)
-                aug_images.append(flip_image.cuda())
-                aug_boxes.append(flip_boxes.cuda())
-                color_swap_image = ColorSwap(image)
-                aug_images.append(color_swap_image.cuda())
-                aug_boxes.append(reference_boxes)
-
+                # flip_image, flip_boxes = HorizontalFlip(image, reference_boxes)
+                # aug_images.append(flip_image.cuda())
+                # aug_boxes.append(flip_boxes.cuda())
+                # color_swap_image = ColorSwap(image)
+                # aug_images.append(color_swap_image.cuda())
+                # aug_boxes.append(reference_boxes)
+                # color_adjust_image = ColorAdjust(image)
+                # aug_images.append(color_adjust_image.cuda())
+                # aug_boxes.append(reference_boxes)
+                for i in range(1, 3):
+                    sp_image = SaltPepperNoise(image, i * 0.1)
+                    aug_images.append(sp_image.cuda())
+                    aug_boxes.append(reference_boxes)
                 outputs = task_model(aug_images)
                 for output, aug_box in zip(outputs, aug_boxes):
                     boxes = output['boxes']
@@ -150,7 +156,6 @@ def get_uncertainty(task_model, unlabeled_loader):
                 corresponding_boxes_average = torch.mean(corresponding_boxes_average, 0)
                 stability = torch.sum(corresponding_boxes_average * reference_scores) / torch.sum(
                     reference_scores)
-                print(stability)
                 stabilities.append(stability.cpu().item())
     return stabilities
 
