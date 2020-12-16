@@ -95,7 +95,7 @@ def train_one_epoch(task_model, task_optimizer, vae, vae_optimizer, discriminato
         metric_logger.update(task_loss=task_losses_reduced)
         metric_logger.update(task_lr=task_optimizer.param_groups[0]["lr"])
 
-    for i in range(5 * len(labeled_dataloader)):
+    for i in range(len(labeled_dataloader)):
         unlabeled_imgs = next(unlabeled_data)
         labeled_imgs = next(labeled_data)
         recon, z, mu, logvar = vae(labeled_imgs)
@@ -148,7 +148,9 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
     utils.init_distributed_mode(args)
     print(args)
 

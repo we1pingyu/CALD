@@ -9,7 +9,7 @@ data/*
 # refactoring this file!
 
 ## PyTorch
-
+basemodel/
 .mypy_cache
 *.pyc
 */*.pyc

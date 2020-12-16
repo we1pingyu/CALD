@@ -112,9 +112,9 @@ def get_uncertainty(task_model, unlabeled_loader):
             outputs = task_model(images)
             for output in outputs:
                 uncertainty = 1.0
-                for box, prop, score in zip(output['boxes'], output['props'], output['scores']):
+                for box, prop, prob_max in zip(output['boxes'], output['props'], output['prob_max']):
                     iou = calcu_iou(box, prop)
-                    u = torch.abs(iou + score - 1)
+                    u = torch.abs(iou + prob_max - 1)
                     uncertainty = min(uncertainty, u.cpu().numpy())
                 uncertainties.append(uncertainty)
     return uncertainties
@@ -126,7 +126,7 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.enabled = True
     utils.init_distributed_mode(args)
     print(args)
 

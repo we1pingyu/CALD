@@ -47,6 +47,7 @@ from detection.train import *
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
 from cal4od.cal4od_helper import *
 from ll4al.data.sampler import SubsetSequentialSampler
+from detection.frcnn_la import fasterrcnn_resnet50_fpn_feature
 
 
 def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
@@ -113,12 +114,13 @@ def get_uncertainty(task_model, unlabeled_loader):
             aug_boxes = []
             for image in images:
                 output = task_model([F.to_tensor(image).cuda()])
-                reference_boxes, reference_scores = output[0]['boxes'], output[0]['scores']
+                reference_boxes, prob_max, reference_scores_cls = output[0]['boxes'], output[0]['prob_max'], output[0][
+                    'scores_cls']
                 if output[0]['boxes'].shape[0] == 0:
                     stabilities.append(0.0)
                     break
-                corresponding_boxes_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
-
+                corresponding_ious_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
+                corresponding_kl_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
                 # start augment
                 # flip_image, flip_boxes = HorizontalFlip(image, reference_boxes)
                 # aug_images.append(flip_image.cuda())
@@ -129,19 +131,22 @@ def get_uncertainty(task_model, unlabeled_loader):
                 # color_adjust_image = ColorAdjust(image)
                 # aug_images.append(color_adjust_image.cuda())
                 # aug_boxes.append(reference_boxes)
-                for i in range(1, 3):
+                for i in range(1, 7):
                     sp_image = SaltPepperNoise(image, i * 0.1)
                     aug_images.append(sp_image.cuda())
                     aug_boxes.append(reference_boxes)
                 outputs = task_model(aug_images)
                 for output, aug_box in zip(outputs, aug_boxes):
-                    boxes = output['boxes']
+                    boxes, scores_cls = output['boxes'], output['scores_cls']
                     if boxes.shape[0] == 0:
-                        corresponding_boxes_average = torch.cat(
-                            (corresponding_boxes_average, torch.zeros([1, reference_boxes.shape[0]]).cuda()))
+                        corresponding_ious_average = torch.cat(
+                            (corresponding_ious_average, torch.zeros([1, reference_boxes.shape[0]]).cuda()))
+                        corresponding_kl_average = torch.cat(
+                            (corresponding_kl_average, torch.zeros([1, reference_boxes.shape[0]]).cuda()))
                         continue
-                    corresponding_boxes_single = torch.tensor([]).cuda()
-                    for ab in aug_box:
+                    corresponding_ious_single = torch.tensor([]).cuda()
+                    corresponding_kl_single = torch.tensor([]).cuda()
+                    for ab, reference_score_cls in zip(aug_box, reference_scores_cls):
                         width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
                         height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
                         Aarea = (ab[2] - ab[0]) * (ab[3] - ab[1])
@@ -150,12 +155,21 @@ def get_uncertainty(task_model, unlabeled_loader):
                         iou = iner_area / (Aarea + Barea - iner_area)
                         iou[width < 0] = 0.0
                         iou[height < 0] = 0.0
-                        corresponding_boxes_single = torch.cat((corresponding_boxes_single, torch.max(iou).reshape(1)))
-                    corresponding_boxes_average = torch.cat(
-                        (corresponding_boxes_average, corresponding_boxes_single.unsqueeze(0)))
-                corresponding_boxes_average = torch.mean(corresponding_boxes_average, 0)
-                stability = torch.sum(corresponding_boxes_average * reference_scores) / torch.sum(
-                    reference_scores)
+                        corresponding_ious_single = torch.cat((corresponding_ious_single, torch.max(iou).reshape(1)))
+                        kldiv = 0.5 / ((reference_score_cls.log() * torch.log(reference_score_cls /
+                                                                              scores_cls[torch.argmax(iou)])).mean() +
+                                       (scores_cls.log() * torch.log(
+                                           scores_cls[torch.argmax(iou)] / reference_score_cls)).mean())
+                        corresponding_kl_single = torch.cat(
+                            (corresponding_kl_single, kldiv.reshape(1)))
+                    corresponding_ious_average = torch.cat(
+                        (corresponding_ious_average, corresponding_ious_single.unsqueeze(0)))
+                    corresponding_kl_average = torch.cat(
+                        (corresponding_kl_average, corresponding_kl_single.unsqueeze(0)))
+                corresponding_ious_average = torch.mean(corresponding_ious_average, 0)
+                corresponding_kl_average = torch.mean(corresponding_kl_average, 0)
+                stability = torch.sum(corresponding_ious_average + corresponding_kl_average
+                                      * torch.exp(prob_max)) / torch.sum(torch.exp(prob_max))
                 stabilities.append(stability.cpu().item())
     return stabilities
 
@@ -166,7 +180,9 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
     utils.init_distributed_mode(args)
     print(args)
 
@@ -195,6 +211,7 @@ def main(args):
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers,
                                   collate_fn=utils.collate_fn)
     for cycle in range(args.cycles):
+
         if args.aspect_ratio_group_factor >= 0:
             group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
             train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
@@ -205,9 +222,30 @@ def main(args):
                                                   collate_fn=utils.collate_fn)
 
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+        task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
+        if cycle == 0:
+            checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+            task_model.load_state_dict(checkpoint['model'])
+            # if 'coco' in args.dataset:
+            #     coco_evaluate(task_model, data_loader_test)
+            # elif 'voc' in args.dataset:
+            #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            random.shuffle(unlabeled_set)
+            subset = unlabeled_set
+            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            print("Getting stability")
+            uncertainty = get_uncertainty(task_model, unlabeled_loader)
+            arg = np.argsort(uncertainty)
 
+            # Update the labeled dataset and the unlabeled dataset, respectively
+            labeled_set += list(torch.tensor(subset)[arg][:int(0.05 * num_images)].numpy())
+            unlabeled_set = list(torch.tensor(subset)[arg][int(0.05 * num_images):].numpy())
+
+            # Create a new dataloader for the updated labeled dataset
+            train_sampler = SubsetRandomSampler(labeled_set)
+            continue
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
@@ -231,6 +269,11 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset)
+        # if True:
+        #     utils.save_on_master({
+        #         'model': task_model.state_dict(),
+        #         'args': args},
+        #         os.path.join('basemodel', 'voc2007_frcnn_1st.pth'))
         random.shuffle(unlabeled_set)
         subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),

@@ -90,7 +90,9 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.enabled = True
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
     utils.init_distributed_mode(args)
     print(args)
 
@@ -100,12 +102,11 @@ def main(args):
     print("Loading data")
 
     if 'voc2007' in args.dataset:
-        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset, num_classes = get_dataset(args.dataset, "trainval", get_transform(train=True), args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
     else:
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
-
     print("Creating data loaders")
     num_images = len(dataset)
     indices = list(range(num_images))
@@ -129,7 +130,21 @@ def main(args):
         print("Creating model")
         task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
+        if cycle == 8:
+            checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+            task_model.load_state_dict(checkpoint['model'])
+            # if 'coco' in args.dataset:
+            #     coco_evaluate(task_model, data_loader_test)
+            # elif 'voc' in args.dataset:
+            #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            random.shuffle(unlabeled_set)
+            # Update the labeled dataset and the unlabeled dataset, respectively
+            labeled_set += unlabeled_set[:int(0.05 * num_images)]
+            unlabeled_set = unlabeled_set[int(0.05 * num_images):]
 
+            # Create a new dataloader for the updated labeled dataset
+            train_sampler = SubsetRandomSampler(labeled_set)
+            continue
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
@@ -139,7 +154,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test)
+                voc_evaluate(task_model, data_loader_test, args.dataset)
             return
         print("Start training")
         start_time = time.time()
@@ -151,7 +166,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, cycle)
+                    voc_evaluate(task_model, data_loader_test, args.dataset)
         random.shuffle(unlabeled_set)
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += unlabeled_set[:int(0.05 * num_images)]
@@ -172,7 +187,7 @@ if __name__ == "__main__":
         description=__doc__)
 
     parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
-    parser.add_argument('--dataset', default='voc', help='dataset')
+    parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
