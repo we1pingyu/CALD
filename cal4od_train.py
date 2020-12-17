@@ -1,22 +1,3 @@
-r"""PyTorch Detection Training.
-
-To run in a multi-gpu environment, use the distributed launcher::
-
-    python -m torch.distributed.launch --nproc_per_node=$NGPU --use_env \
-        train.py ... --world-size $NGPU
-
-The default hyperparameters are tuned for training on 8 gpus and 2 images per gpu.
-    --lr 0.02 --batch-size 2 --world-size 8
-If you use different number of gpus, the learning rate should be changed to 0.02/8*$NGPU.
-
-On top of that, for training Faster/Mask R-CNN, the default hyperparameters are
-    --epochs 26 --lr-steps 16 22 --aspect-ratio-group-factor 3
-
-Also, if you train Keypoint R-CNN, the default hyperparameters are
-    --epochs 46 --lr-steps 36 43 --aspect-ratio-group-factor 3
-Because the number of images is smaller in the person keypoint subset of COCO,
-the number of epochs should be adapted so that we have the same number of iterations.
-"""
 import datetime
 import os
 import time
@@ -103,7 +84,7 @@ def calcu_iou(A, B):
     return iner_area / (Aarea + Barea - iner_area)
 
 
-def get_uncertainty(task_model, unlabeled_loader):
+def get_uncertainty(task_model, unlabeled_loader, cycle):
     task_model.eval()
     with torch.no_grad():
         stabilities = []
@@ -114,29 +95,38 @@ def get_uncertainty(task_model, unlabeled_loader):
             aug_boxes = []
             for image in images:
                 output = task_model([F.to_tensor(image).cuda()])
-                reference_boxes, prob_max, reference_scores_cls = output[0]['boxes'], output[0]['prob_max'], output[0][
-                    'scores_cls']
+                reference_boxes, prob_max, reference_scores_cls, reference_labels = output[0]['boxes'], output[0][
+                    'prob_max'], output[0]['scores_cls'], output[0]['labels']
                 if output[0]['boxes'].shape[0] == 0:
                     stabilities.append(0.0)
                     break
                 corresponding_ious_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
                 corresponding_kl_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
                 # start augment
-                # flip_image, flip_boxes = HorizontalFlip(image, reference_boxes)
-                # aug_images.append(flip_image.cuda())
-                # aug_boxes.append(flip_boxes.cuda())
+                flip_image, flip_boxes = HorizontalFlip(image, reference_boxes)
+                aug_images.append(flip_image.cuda())
+                aug_boxes.append(flip_boxes.cuda())
                 # color_swap_image = ColorSwap(image)
                 # aug_images.append(color_swap_image.cuda())
                 # aug_boxes.append(reference_boxes)
-                # color_adjust_image = ColorAdjust(image)
-                # aug_images.append(color_adjust_image.cuda())
-                # aug_boxes.append(reference_boxes)
-                for i in range(1, 7):
-                    sp_image = SaltPepperNoise(image, i * 0.1)
-                    aug_images.append(sp_image.cuda())
-                    aug_boxes.append(reference_boxes)
+                # draw_PIL_image(color_swap_image, reference_boxes, reference_labels, 'color_swap')
+                # for i in range(2, 6):
+                #     color_adjust_image = ColorAdjust(image, i)
+                #     aug_images.append(color_adjust_image.cuda())
+                #     aug_boxes.append(reference_boxes)
+                #     draw_PIL_image(color_adjust_image, reference_boxes, reference_labels, i)
+                # for i in range(1, 7):
+                #     sp_image = SaltPepperNoise(image, i * 0.05)
+                #     aug_images.append(sp_image.cuda())
+                #     aug_boxes.append(reference_boxes)
+                #     draw_PIL_image(sp_image, reference_boxes, reference_labels, i)
+                cutout_image = cutout(image, reference_boxes, reference_labels)
+                aug_images.append(cutout_image.cuda())
+                aug_boxes.append(reference_boxes)
                 outputs = task_model(aug_images)
+                uncertainties = []
                 for output, aug_box in zip(outputs, aug_boxes):
+                    uncertainty = 1.0
                     boxes, scores_cls = output['boxes'], output['scores_cls']
                     if boxes.shape[0] == 0:
                         corresponding_ious_average = torch.cat(
@@ -146,7 +136,7 @@ def get_uncertainty(task_model, unlabeled_loader):
                         continue
                     corresponding_ious_single = torch.tensor([]).cuda()
                     corresponding_kl_single = torch.tensor([]).cuda()
-                    for ab, reference_score_cls in zip(aug_box, reference_scores_cls):
+                    for ab, reference_score_cls, pm in zip(aug_box, reference_scores_cls, prob_max):
                         width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
                         height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
                         Aarea = (ab[2] - ab[0]) * (ab[3] - ab[1])
@@ -155,22 +145,32 @@ def get_uncertainty(task_model, unlabeled_loader):
                         iou = iner_area / (Aarea + Barea - iner_area)
                         iou[width < 0] = 0.0
                         iou[height < 0] = 0.0
+                        if cycle <= 7:
+                            uncertainty = min(uncertainty,
+                                              torch.abs(torch.max(iou) + pm - 1).item())
+                            continue
                         corresponding_ious_single = torch.cat((corresponding_ious_single, torch.max(iou).reshape(1)))
                         kldiv = 0.5 / ((reference_score_cls.log() * torch.log(reference_score_cls /
                                                                               scores_cls[torch.argmax(iou)])).mean() +
-                                       (scores_cls.log() * torch.log(
+                                       (scores_cls[torch.argmax(iou)].log() * torch.log(
                                            scores_cls[torch.argmax(iou)] / reference_score_cls)).mean())
                         corresponding_kl_single = torch.cat(
                             (corresponding_kl_single, kldiv.reshape(1)))
+                    if cycle <= 7:
+                        uncertainties.append(uncertainty)
+                        continue
                     corresponding_ious_average = torch.cat(
                         (corresponding_ious_average, corresponding_ious_single.unsqueeze(0)))
                     corresponding_kl_average = torch.cat(
                         (corresponding_kl_average, corresponding_kl_single.unsqueeze(0)))
+                if cycle <= 7:
+                    stabilities.append(np.mean(uncertainties))
+                    continue
                 corresponding_ious_average = torch.mean(corresponding_ious_average, 0)
                 corresponding_kl_average = torch.mean(corresponding_kl_average, 0)
                 stability = torch.sum(corresponding_ious_average + corresponding_kl_average
                                       * torch.exp(prob_max)) / torch.sum(torch.exp(prob_max))
-                stabilities.append(stability.cpu().item())
+                stabilities.append(stability.item())
     return stabilities
 
 
@@ -225,7 +225,10 @@ def main(args):
         task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
         if cycle == 0:
-            checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+            if '2007' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+            elif '2012' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
             # if 'coco' in args.dataset:
             #     coco_evaluate(task_model, data_loader_test)
@@ -236,8 +239,14 @@ def main(args):
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
             print("Getting stability")
-            uncertainty = get_uncertainty(task_model, unlabeled_loader)
+            uncertainty = get_uncertainty(task_model, unlabeled_loader, cycle)
             arg = np.argsort(uncertainty)
+
+            # print(np.mean(uncertainty))
+            # unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+            #                               num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            # uncertainty = get_uncertainty(task_model, unlabeled_loader)
+            # print(np.mean(uncertainty))
 
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:int(0.05 * num_images)].numpy())
@@ -273,13 +282,13 @@ def main(args):
         #     utils.save_on_master({
         #         'model': task_model.state_dict(),
         #         'args': args},
-        #         os.path.join('basemodel', 'voc2007_frcnn_1st.pth'))
+        #         os.path.join('basemodel', 'voc2012_frcnn_1st.pth'))
         random.shuffle(unlabeled_set)
         subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                       num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         print("Getting stability")
-        uncertainty = get_uncertainty(task_model, unlabeled_loader)
+        uncertainty = get_uncertainty(task_model, unlabeled_loader, cycle)
         arg = np.argsort(uncertainty)
 
         # Update the labeled dataset and the unlabeled dataset, respectively
