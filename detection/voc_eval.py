@@ -185,10 +185,10 @@ def voc_eval(classname,
     return rec, prec, ap
 
 
-def _write_voc_results_file(all_boxes, image_index, root, classes):
-    if os.path.exists('/tmp/results'):
-        shutil.rmtree('/tmp/results')
-    os.makedirs('/tmp/results')
+def _write_voc_results_file(all_boxes, image_index, path, classes):
+    if os.path.exists('/tmp/{}'.format(path)):
+        shutil.rmtree('/tmp/{}'.format(path))
+    os.makedirs('/tmp/{}'.format(path))
     print('Writing results file', end='\r')
     for cls_ind, cls in enumerate(classes):
         # DistributeSampler happens to clone the inputs to make the task 
@@ -203,7 +203,7 @@ def _write_voc_results_file(all_boxes, image_index, root, classes):
         if cls == '__background__':
             continue
 
-        filename = '/tmp/results/det_test_{:s}.txt'.format(cls)
+        filename = '/tmp/{}/det_test_{:s}.txt'.format(path, cls)
         with open(filename, 'wt') as f:
             prev_index = ''
             for im_ind, index in enumerate(new_image_index):
@@ -222,7 +222,7 @@ def _write_voc_results_file(all_boxes, image_index, root, classes):
                                    dets[k, 2] + 1, dets[k, 3] + 1))
 
 
-def _do_python_eval(data_loader, year):
+def _do_python_eval(data_loader, year, path):
     if '2012' in year:
         imagesetfile = os.path.join(data_loader.dataset.root,
                                     'VOCdevkit/VOC2012/ImageSets/Main/' + data_loader.dataset.image_set + '.txt')
@@ -243,7 +243,7 @@ def _do_python_eval(data_loader, year):
     for cls in classes:
         if cls == '__background__':
             continue
-        filename = '/tmp/results/det_test_{:s}.txt'.format(cls)
+        filename = '/tmp/{}/det_test_{:s}.txt'.format(path, cls)
         for iou in [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]:
             rec, prec, ap = voc_eval(cls, filename, imagesetfile, annopath,
                                      ovthresh=iou)
@@ -258,9 +258,9 @@ def _do_python_eval(data_loader, year):
                 ap_75.append(ap)
 
     print('=====================================================================================================')
-    print('{}|{}|{}|{}'.format(round(np.mean(ap_iou) * 100, 1), round(np.mean(ap_50) * 100, 1),
-                               round(np.mean(ap_75) * 100, 1), round(np.mean(rec_cls) * 100, 1)), end='')
+    print('{}|{}|{}|{}|'.format(round(np.mean(ap_iou) * 100, 1), round(np.mean(ap_50) * 100, 1),
+                                round(np.mean(ap_75) * 100, 1), round(np.mean(rec_cls) * 100, 1)), end='')
     for ap in ap_cls:
-        print('|{}'.format(round(ap * 100, 1)), end='')
+        print('{}|'.format(round(ap * 100, 1)), end='')
     print('')
     print('=====================================================================================================')

@@ -83,7 +83,7 @@ VOC_CLASSES = (
 
 
 @torch.no_grad()
-def voc_evaluate(model, data_loader, year, feature=False):
+def voc_evaluate(model, data_loader, year, feature=False, path='results'):
     device = 'cuda'
     n_threads = torch.get_num_threads()
     torch.set_num_threads(1)
@@ -151,9 +151,9 @@ def voc_evaluate(model, data_loader, year, feature=False):
         image_index = []
         for iig in image_index_gathered:
             image_index += iig
-        _write_voc_results_file(all_boxes, image_index, data_loader.dataset.root,
+        _write_voc_results_file(all_boxes, image_index, path,
                                 data_loader.dataset._transforms.transforms[0].CLASSES)
-        _do_python_eval(data_loader, year)
+        _do_python_eval(data_loader, year, path)
     torch.set_num_threads(n_threads)
 
 

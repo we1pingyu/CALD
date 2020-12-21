@@ -95,15 +95,15 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
             aug_boxes = []
             for image in images:
                 output = task_model([F.to_tensor(image).cuda()])
-                reference_boxes, prob_max, reference_scores_cls, reference_labels = output[0]['boxes'], output[0][
+                ref_boxes, prob_max, ref_scores_cls, reference_labels = output[0]['boxes'], output[0][
                     'prob_max'], output[0]['scores_cls'], output[0]['labels']
                 if output[0]['boxes'].shape[0] == 0:
                     stabilities.append(0.0)
                     break
-                corresponding_ious_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
-                corresponding_kl_average = torch.empty([0, reference_boxes.shape[0]]).cuda()
+                cor_iou_average = torch.empty([0, ref_boxes.shape[0]]).cuda()
+                cor_kl_average = torch.empty([0, ref_boxes.shape[0]]).cuda()
                 # start augment
-                flip_image, flip_boxes = HorizontalFlip(image, reference_boxes)
+                flip_image, flip_boxes = HorizontalFlip(image, ref_boxes)
                 aug_images.append(flip_image.cuda())
                 aug_boxes.append(flip_boxes.cuda())
                 # color_swap_image = ColorSwap(image)
@@ -115,28 +115,26 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 #     aug_images.append(color_adjust_image.cuda())
                 #     aug_boxes.append(reference_boxes)
                 #     draw_PIL_image(color_adjust_image, reference_boxes, reference_labels, i)
-                # for i in range(1, 7):
-                #     sp_image = SaltPepperNoise(image, i * 0.05)
+                # for i in range(1, 5):
+                #     sp_image = SaltPepperNoise(image, i * 0.1)
                 #     aug_images.append(sp_image.cuda())
                 #     aug_boxes.append(reference_boxes)
                 #     draw_PIL_image(sp_image, reference_boxes, reference_labels, i)
-                cutout_image = cutout(image, reference_boxes, reference_labels)
+                cutout_image = cutout(image, ref_boxes, reference_labels)
                 aug_images.append(cutout_image.cuda())
-                aug_boxes.append(reference_boxes)
+                aug_boxes.append(ref_boxes)
                 outputs = task_model(aug_images)
                 uncertainties = []
                 for output, aug_box in zip(outputs, aug_boxes):
                     uncertainty = 1.0
                     boxes, scores_cls = output['boxes'], output['scores_cls']
                     if boxes.shape[0] == 0:
-                        corresponding_ious_average = torch.cat(
-                            (corresponding_ious_average, torch.zeros([1, reference_boxes.shape[0]]).cuda()))
-                        corresponding_kl_average = torch.cat(
-                            (corresponding_kl_average, torch.zeros([1, reference_boxes.shape[0]]).cuda()))
+                        cor_iou_average = torch.cat((cor_iou_average, torch.zeros([1, ref_boxes.shape[0]]).cuda()))
+                        cor_kl_average = torch.cat((cor_kl_average, torch.zeros([1, ref_boxes.shape[0]]).cuda()))
                         continue
-                    corresponding_ious_single = torch.tensor([]).cuda()
-                    corresponding_kl_single = torch.tensor([]).cuda()
-                    for ab, reference_score_cls, pm in zip(aug_box, reference_scores_cls, prob_max):
+                    cor_iou_single = torch.tensor([]).cuda()
+                    cor_kl_single = torch.tensor([]).cuda()
+                    for ab, ref_score_cls, pm in zip(aug_box, ref_scores_cls, prob_max):
                         width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
                         height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
                         Aarea = (ab[2] - ab[0]) * (ab[3] - ab[1])
@@ -145,31 +143,26 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                         iou = iner_area / (Aarea + Barea - iner_area)
                         iou[width < 0] = 0.0
                         iou[height < 0] = 0.0
+                        cor_iou_single = torch.cat((cor_iou_single, torch.max(iou).reshape(1)))
+                        kldiv = ((ref_score_cls.log() * torch.log(ref_score_cls / scores_cls[torch.argmax(iou)])).mean()
+                                 + (scores_cls[torch.argmax(iou)].log() * torch.log(
+                                    scores_cls[torch.argmax(iou)] / ref_score_cls)).mean())
                         if cycle <= 7:
-                            uncertainty = min(uncertainty,
-                                              torch.abs(torch.max(iou) + pm - 1).item())
+                            uncertainty = min(uncertainty, torch.abs(torch.max(iou) + kldiv * pm - 1).item())
                             continue
-                        corresponding_ious_single = torch.cat((corresponding_ious_single, torch.max(iou).reshape(1)))
-                        kldiv = 0.5 / ((reference_score_cls.log() * torch.log(reference_score_cls /
-                                                                              scores_cls[torch.argmax(iou)])).mean() +
-                                       (scores_cls[torch.argmax(iou)].log() * torch.log(
-                                           scores_cls[torch.argmax(iou)] / reference_score_cls)).mean())
-                        corresponding_kl_single = torch.cat(
-                            (corresponding_kl_single, kldiv.reshape(1)))
+                        cor_kl_single = torch.cat((cor_kl_single, kldiv.reshape(1)))
                     if cycle <= 7:
                         uncertainties.append(uncertainty)
                         continue
-                    corresponding_ious_average = torch.cat(
-                        (corresponding_ious_average, corresponding_ious_single.unsqueeze(0)))
-                    corresponding_kl_average = torch.cat(
-                        (corresponding_kl_average, corresponding_kl_single.unsqueeze(0)))
+                    cor_iou_average = torch.cat((cor_iou_average, cor_iou_single.unsqueeze(0)))
+                    cor_kl_average = torch.cat((cor_kl_average, cor_kl_single.unsqueeze(0)))
                 if cycle <= 7:
                     stabilities.append(np.mean(uncertainties))
                     continue
-                corresponding_ious_average = torch.mean(corresponding_ious_average, 0)
-                corresponding_kl_average = torch.mean(corresponding_kl_average, 0)
-                stability = torch.sum(corresponding_ious_average + corresponding_kl_average
-                                      * torch.exp(prob_max)) / torch.sum(torch.exp(prob_max))
+                cor_iou_average = torch.mean(cor_iou_average, 0)
+                cor_kl_average = torch.mean(cor_kl_average, 0)
+                stability = torch.sum(cor_iou_average + cor_kl_average * torch.exp(prob_max)) / torch.sum(
+                    torch.exp(prob_max))
                 stabilities.append(stability.item())
     return stabilities
 
@@ -265,7 +258,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test, args.dataset)
+                voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
             return
         print("Start training")
         start_time = time.time()
@@ -277,7 +270,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
         # if True:
         #     utils.save_on_master({
         #         'model': task_model.state_dict(),
@@ -339,6 +332,7 @@ if __name__ == "__main__":
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('-p', '--results-path', default='results', help='path to save detection results (only for voc)')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
     parser.add_argument(
