@@ -176,16 +176,16 @@ def main(args):
             # elif 'voc' in args.dataset:
             #     voc_evaluate(task_model, data_loader_test, args.dataset)
             random.shuffle(unlabeled_set)
-            subset = unlabeled_set[500:800]
+            subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
             print("Getting stability")
             uncertainty = get_uncertainty(task_model, unlabeled_loader)
-            print([float('{:.4f}'.format(i)) for i in uncertainty])
-            unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
-                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            uncertainty = get_uncertainty(task_model, unlabeled_loader)
-            print([float('{:.4f}'.format(i)) for i in uncertainty])
+            # print([float('{:.4f}'.format(i)) for i in uncertainty])
+            # unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+            #                               num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            # uncertainty = get_uncertainty(task_model, unlabeled_loader)
+            # print([float('{:.4f}'.format(i)) for i in uncertainty])
             arg = np.argsort(uncertainty)
 
             # Update the labeled dataset and the unlabeled dataset, respectively

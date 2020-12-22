@@ -95,7 +95,7 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
             aug_boxes = []
             for image in images:
                 output = task_model([F.to_tensor(image).cuda()])
-                ref_boxes, prob_max, ref_scores_cls, reference_labels = output[0]['boxes'], output[0][
+                ref_boxes, prob_max, ref_scores_cls, ref_labels = output[0]['boxes'], output[0][
                     'prob_max'], output[0]['scores_cls'], output[0]['labels']
                 if output[0]['boxes'].shape[0] == 0:
                     stabilities.append(0.0)
@@ -115,12 +115,12 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 #     aug_images.append(color_adjust_image.cuda())
                 #     aug_boxes.append(reference_boxes)
                 #     draw_PIL_image(color_adjust_image, reference_boxes, reference_labels, i)
-                # for i in range(1, 5):
-                #     sp_image = SaltPepperNoise(image, i * 0.1)
+                # for i in range(1, 7):
+                #     sp_image = SaltPepperNoise(image, i * 0.05)
                 #     aug_images.append(sp_image.cuda())
-                #     aug_boxes.append(reference_boxes)
-                #     draw_PIL_image(sp_image, reference_boxes, reference_labels, i)
-                cutout_image = cutout(image, ref_boxes, reference_labels)
+                #     aug_boxes.append(ref_boxes)
+                #     draw_PIL_image(sp_image, ref_boxes, ref_labels, i)
+                cutout_image = cutout(image, ref_boxes, ref_labels)
                 aug_images.append(cutout_image.cuda())
                 aug_boxes.append(ref_boxes)
                 outputs = task_model(aug_images)
