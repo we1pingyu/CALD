@@ -88,10 +88,106 @@ def cutout(image, boxes, labels, fill_val=0, bbox_remove_thres=0.4, bbox_min_thr
         cutout_arr = torch.full((original_channel, int(bottom) - int(top), int(right) - int(left)), fill_val)
         image[:, int(top):int(bottom), int(left):int(right)] = cutout_arr
         count += 1
-        if count >= 2:
+        if count >= 4:
             break
     # draw_PIL_image(image, boxes, labels)
     return image
+
+
+def rotate(image, boxes, angle):
+    '''
+        Rotate image and bounding box
+        image: A Pil image (w, h)
+        boxes: A tensors of dimensions (#objects, 4)
+
+        Out: rotated image (w, h), rotated boxes
+    '''
+    new_image = image.copy()
+    new_boxes = boxes.clone()
+
+    # Rotate image, expand = True
+    w = image.width
+    h = image.height
+    cx = w / 2
+    cy = h / 2
+    new_image = new_image.rotate(angle, expand=True)
+    angle = np.radians(angle)
+    alpha = np.cos(angle)
+    beta = np.sin(angle)
+    # Get affine matrix
+    AffineMatrix = torch.tensor([[alpha, beta, (1 - alpha) * cx - beta * cy],
+                                 [-beta, alpha, beta * cx + (1 - alpha) * cy]])
+
+    # Rotation boxes
+    box_width = (boxes[:, 2] - boxes[:, 0]).reshape(-1, 1)
+    box_height = (boxes[:, 3] - boxes[:, 1]).reshape(-1, 1)
+
+    # Get corners for boxes
+    x1 = boxes[:, 0].reshape(-1, 1)
+    y1 = boxes[:, 1].reshape(-1, 1)
+
+    x2 = x1 + box_width
+    y2 = y1
+
+    x3 = x1
+    y3 = y1 + box_height
+
+    x4 = boxes[:, 2].reshape(-1, 1)
+    y4 = boxes[:, 3].reshape(-1, 1)
+
+    corners = torch.stack((x1, y1, x2, y2, x3, y3, x4, y4), dim=1)
+    corners.reshape(len(boxes), 8)  # Tensors of dimensions (#objects, 8)
+    corners = corners.reshape(-1, 2)  # Tensors of dimension (4* #objects, 2)
+    corners = torch.cat((corners, torch.ones(corners.shape[0], 1).cuda()),
+                        dim=1)  # (Tensors of dimension (4* #objects, 3))
+
+    cos = np.abs(AffineMatrix[0, 0])
+    sin = np.abs(AffineMatrix[0, 1])
+
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+    AffineMatrix[0, 2] += (nW / 2) - cx
+    AffineMatrix[1, 2] += (nH / 2) - cy
+
+    # Apply affine transform
+    rotate_corners = torch.mm(AffineMatrix.cuda().float(), corners.t()).t()
+    rotate_corners = rotate_corners.reshape(-1, 8)
+
+    x_corners = rotate_corners[:, [0, 2, 4, 6]]
+    y_corners = rotate_corners[:, [1, 3, 5, 7]]
+
+    # Get (x_min, y_min, x_max, y_max)
+    x_min, _ = torch.min(x_corners, dim=1)
+    x_min = x_min.reshape(-1, 1)
+    y_min, _ = torch.min(y_corners, dim=1)
+    y_min = y_min.reshape(-1, 1)
+    x_max, _ = torch.max(x_corners, dim=1)
+    x_max = x_max.reshape(-1, 1)
+    y_max, _ = torch.max(y_corners, dim=1)
+    y_max = y_max.reshape(-1, 1)
+
+    new_boxes = torch.cat((x_min, y_min, x_max, y_max), dim=1)
+
+    scale_x = new_image.width / w
+    scale_y = new_image.height / h
+
+    # Resize new image to (w, h)
+    new_image = new_image.resize((w, h))
+
+    # Resize boxes
+    new_boxes /= torch.Tensor([scale_x, scale_y, scale_x, scale_y]).cuda()
+    new_boxes[:, 0] = torch.clamp(new_boxes[:, 0], 0, w)
+    new_boxes[:, 1] = torch.clamp(new_boxes[:, 1], 0, h)
+    new_boxes[:, 2] = torch.clamp(new_boxes[:, 2], 0, w)
+    new_boxes[:, 3] = torch.clamp(new_boxes[:, 3], 0, h)
+    return F.to_tensor(new_image), new_boxes
+
+
+def resize(img, boxes, ratio):
+    w, h = img.size
+    ow = int(w * ratio)
+    oh = int(h * ratio)
+    return F.to_tensor(img.resize((ow, oh), Image.BILINEAR)), boxes * ratio
 
 
 def intersect(boxes1, boxes2):
