@@ -6,6 +6,7 @@ import math
 import sys
 import numpy as np
 import math
+import scipy.stats
 
 import torch
 import torch.utils.data
@@ -133,27 +134,27 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 # resize_image, resize_boxes = resize(image, ref_boxes, 0.5)
                 # aug_images.append(resize_image.cuda())
                 # aug_boxes.append(resize_boxes)
-                draw_PIL_image(resize_image, resize_boxes, ref_labels, 2)
-                rot_image, rot_boxes = rotate(image, ref_boxes, 10)
-                aug_images.append(rot_image.cuda())
-                aug_boxes.append(rot_boxes)
+                # draw_PIL_image(resize_image, resize_boxes, ref_labels, 2)
+                # rot_image, rot_boxes = rotate(flip_image, flip_boxes, 10)
+                # aug_images.append(rot_image.cuda())
+                # aug_boxes.append(rot_boxes)
                 # draw_PIL_image(rot_image, ref_boxes, ref_labels, 1)
-                rot_image, rot_boxes = rotate(image, ref_boxes, -10)
-                aug_images.append(rot_image.cuda())
-                aug_boxes.append(rot_boxes)
+                # rot_image, rot_boxes = rotate(flip_image, flip_boxes, -10)
+                # aug_images.append(rot_image.cuda())
+                # aug_boxes.append(rot_boxes)
                 # draw_PIL_image(rot_image, ref_boxes, ref_labels, 2)
                 outputs = task_model(aug_images)
                 uncertainties = []
                 for output, aug_box in zip(outputs, aug_boxes):
                     uncertainty = 1.0
-                    boxes, scores_cls = output['boxes'], output['scores_cls']
+                    boxes, scores_cls, pm = output['boxes'], output['scores_cls'], output['prob_max']
                     if boxes.shape[0] == 0:
                         cor_iou_average = torch.cat((cor_iou_average, torch.zeros([1, ref_boxes.shape[0]]).cuda()))
                         cor_kl_average = torch.cat((cor_kl_average, torch.zeros([1, ref_boxes.shape[0]]).cuda()))
                         continue
                     cor_iou_single = torch.tensor([]).cuda()
                     cor_kl_single = torch.tensor([]).cuda()
-                    for ab, ref_score_cls, pm in zip(aug_box, ref_scores_cls, prob_max):
+                    for ab, ref_score_cls, ref_pm in zip(aug_box, ref_scores_cls, prob_max):
                         width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
                         height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
                         Aarea = (ab[2] - ab[0]) * (ab[3] - ab[1])
@@ -163,11 +164,15 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                         iou[width < 0] = 0.0
                         iou[height < 0] = 0.0
                         cor_iou_single = torch.cat((cor_iou_single, torch.max(iou).reshape(1)))
-                        kldiv = ((ref_score_cls.log() * torch.log(ref_score_cls / scores_cls[torch.argmax(iou)])).mean()
-                                 + (scores_cls[torch.argmax(iou)].log() * torch.log(
-                                    scores_cls[torch.argmax(iou)] / ref_score_cls)).mean())
+                        p = ref_score_cls.cpu().numpy()
+                        q = scores_cls[torch.argmax(iou)].cpu().numpy()
+                        M = (p + q) / 2
+                        jsdiv = 0.5 * scipy.stats.entropy(p, M) + 0.5 * scipy.stats.entropy(q, M)
                         if cycle <= 7:
-                            uncertainty = min(uncertainty, torch.abs(torch.max(iou) + kldiv * pm - 1).item())
+                            uncertainty = min(uncertainty,
+                                              torch.abs(torch.max(iou) + (1 - jsdiv) * ref_pm - 1).item())
+                            # print(torch.max(iou).item(), (1 - jsdiv), ref_pm.item())
+                            # print(uncertainty)
                             continue
                         cor_kl_single = torch.cat((cor_kl_single, kldiv.reshape(1)))
                     if cycle <= 7:

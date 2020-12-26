@@ -5,6 +5,9 @@ import numpy as np
 import torch
 import PIL
 from PIL import Image, ImageDraw
+import datetime
+import os
+import time
 
 
 def HorizontalFlip(image, bbox):
@@ -88,7 +91,7 @@ def cutout(image, boxes, labels, fill_val=0, bbox_remove_thres=0.4, bbox_min_thr
         cutout_arr = torch.full((original_channel, int(bottom) - int(top), int(right) - int(left)), fill_val)
         image[:, int(top):int(bottom), int(left):int(right)] = cutout_arr
         count += 1
-        if count >= 4:
+        if count >= 2:
             break
     # draw_PIL_image(image, boxes, labels)
     return image
@@ -102,6 +105,8 @@ def rotate(image, boxes, angle):
 
         Out: rotated image (w, h), rotated boxes
     '''
+    if not type(image) == PIL.Image.Image:
+        image = F.to_pil_image(image)
     new_image = image.copy()
     new_boxes = boxes.clone()
 
@@ -184,6 +189,8 @@ def rotate(image, boxes, angle):
 
 
 def resize(img, boxes, ratio):
+    if not type(img) == PIL.Image.Image:
+        img = F.to_pil_image(img)
     w, h = img.size
     ow = int(w * ratio)
     oh = int(h * ratio)
