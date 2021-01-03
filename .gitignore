@@ -11,6 +11,7 @@ data/*
 ## PyTorch
 basemodel/
 .mypy_cache
+*.npy
 *.pyc
 */*.pyc
 */*.so*
