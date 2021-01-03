@@ -104,10 +104,11 @@ def voc_evaluate(model, data_loader, year, feature=False, path='results'):
             _, outputs = model(image)
         else:
             outputs = model(image)
-
         name = ''.join([chr(i) for i in targets[0]['name'].tolist()])
         image_index.append(name)
-
+        for output in outputs:
+            if 'features' in output.keys():
+                del output['features']
         outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
 
         image_boxes = [[] for i in range(21)]

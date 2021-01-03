@@ -7,6 +7,8 @@ import sys
 import numpy as np
 import math
 import scipy.stats
+from scipy.stats import gaussian_kde
+import matplotlib.pyplot as plt
 
 import torch
 import torch.utils.data
@@ -17,7 +19,7 @@ import torchvision.models.detection.mask_rcnn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.optim.lr_scheduler as lr_scheduler
-from torch.utils.data.sampler import SubsetRandomSampler
+from torch.utils.data.sampler import SubsetRandomSampler, SequentialSampler
 import torchvision.transforms.functional as F
 
 from detection.coco_utils import get_coco, get_coco_kp
@@ -45,11 +47,13 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
         warmup_iters = min(1000, len(data_loader) - 1)
 
         task_lr_scheduler = utils.warmup_lr_scheduler(task_optimizer, warmup_iters, warmup_factor)
-
+    # cls_counts = [0] * 20
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
+        # for target in targets:
+        #     for label in target['labels']:
+        #         cls_counts[label.item() - 1] += 1
         task_loss_dict = task_model(images, targets)
         task_losses = sum(loss for loss in task_loss_dict.values())
         # reduce losses over all GPUs for logging purposes
@@ -68,6 +72,7 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
             task_lr_scheduler.step()
         metric_logger.update(task_loss=task_losses_reduced)
         metric_logger.update(task_lr=task_optimizer.param_groups[0]["lr"])
+    # print(cls_counts / np.sum(cls_counts))
     return metric_logger
 
 
@@ -88,8 +93,9 @@ def calcu_iou(A, B):
 def get_uncertainty(task_model, unlabeled_loader, cycle):
     task_model.eval()
     with torch.no_grad():
-        stabilities = []
-        for images, labels in unlabeled_loader:
+        consistency_all = []
+        mean_all = []
+        for images, _ in unlabeled_loader:
             torch.cuda.synchronize()
             # only support 1 batch size
             aug_images = []
@@ -99,10 +105,8 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 ref_boxes, prob_max, ref_scores_cls, ref_labels = output[0]['boxes'], output[0][
                     'prob_max'], output[0]['scores_cls'], output[0]['labels']
                 if output[0]['boxes'].shape[0] == 0:
-                    stabilities.append(0.0)
+                    consistency_all.append([0.0])
                     break
-                cor_iou_average = torch.empty([0, ref_boxes.shape[0]]).cuda()
-                cor_kl_average = torch.empty([0, ref_boxes.shape[0]]).cuda()
                 # start augment
                 flip_image, flip_boxes = HorizontalFlip(image, ref_boxes)
                 aug_images.append(flip_image.cuda())
@@ -127,13 +131,14 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 # flip_cutout_image = cutout(flip_image.cuda(), flip_boxes.cuda(), ref_labels)
                 # aug_images.append(flip_cutout_image.cuda())
                 # aug_boxes.append(flip_boxes.cuda())
-                # resize_image, resize_boxes = resize(image, ref_boxes, 2)
-                # aug_images.append(resize_image.cuda())
-                # aug_boxes.append(resize_boxes)
+                resize_image, resize_boxes = resize(image, ref_boxes, 0.5)
+                aug_images.append(resize_image.cuda())
+                aug_boxes.append(resize_boxes)
+
                 # draw_PIL_image(resize_image, resize_boxes, ref_labels, 1)
-                # resize_image, resize_boxes = resize(image, ref_boxes, 0.5)
-                # aug_images.append(resize_image.cuda())
-                # aug_boxes.append(resize_boxes)
+                resize_image, resize_boxes = resize(image, ref_boxes, 2.0)
+                aug_images.append(resize_image.cuda())
+                aug_boxes.append(resize_boxes)
                 # draw_PIL_image(resize_image, resize_boxes, ref_labels, 2)
                 # rot_image, rot_boxes = rotate(flip_image, flip_boxes, 10)
                 # aug_images.append(rot_image.cuda())
@@ -144,17 +149,19 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 # aug_boxes.append(rot_boxes)
                 # draw_PIL_image(rot_image, ref_boxes, ref_labels, 2)
                 outputs = task_model(aug_images)
-                uncertainties = []
+                consistency_aug = []
+                mean_aug = []
                 for output, aug_box in zip(outputs, aug_boxes):
-                    uncertainty = 1.0
+                    consistency_img = 1.0
+                    mean_img = []
                     boxes, scores_cls, pm = output['boxes'], output['scores_cls'], output['prob_max']
-                    if boxes.shape[0] == 0:
-                        cor_iou_average = torch.cat((cor_iou_average, torch.zeros([1, ref_boxes.shape[0]]).cuda()))
-                        cor_kl_average = torch.cat((cor_kl_average, torch.zeros([1, ref_boxes.shape[0]]).cuda()))
+                    if len(boxes) == 0:
+                        consistency_aug.append(0)
+                        mean_aug.append(0.0)
                         continue
-                    cor_iou_single = torch.tensor([]).cuda()
-                    cor_kl_single = torch.tensor([]).cuda()
                     for ab, ref_score_cls, ref_pm in zip(aug_box, ref_scores_cls, prob_max):
+                        # if ref_pm < 0.7:
+                        #     continue
                         width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
                         height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
                         Aarea = (ab[2] - ab[0]) * (ab[3] - ab[1])
@@ -163,32 +170,79 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                         iou = iner_area / (Aarea + Barea - iner_area)
                         iou[width < 0] = 0.0
                         iou[height < 0] = 0.0
-                        cor_iou_single = torch.cat((cor_iou_single, torch.max(iou).reshape(1)))
                         p = ref_score_cls.cpu().numpy()
                         q = scores_cls[torch.argmax(iou)].cpu().numpy()
-                        M = (p + q) / 2
-                        jsdiv = 0.5 * scipy.stats.entropy(p, M) + 0.5 * scipy.stats.entropy(q, M)
+                        m = (p + q) / 2
+                        # kldiv = ((np.log(p) * np.log(p / q)).mean() + (np.log(q) * np.log(q / p)).mean())
+                        js = 0.5 * scipy.stats.entropy(p, m) + 0.5 * scipy.stats.entropy(q, m)
                         if cycle <= 7:
-                            uncertainty = min(uncertainty,
-                                              torch.abs(torch.max(iou) + (1 - jsdiv) * ref_pm - 1).item())
-                            # print(torch.max(iou).item(), (1 - jsdiv), ref_pm.item())
-                            # print(uncertainty)
+                            # consistency_img = min(consistency_img, torch.abs(torch.max(iou) - js).item())
+                            consistency_img = min(consistency_img, torch.abs(torch.max(iou) + 0.5 * (1 - js) * (
+                                    ref_pm + pm[torch.argmax(iou)]) - 0.7).item())
+                            mean_img.append(torch.abs(torch.max(iou) + 0.5 * (1 - js) * (
+                                    ref_pm + pm[torch.argmax(iou)])).item())
+                            # mean_img.append(torch.abs(torch.max(iou) - js).item())
                             continue
-                        cor_kl_single = torch.cat((cor_kl_single, kldiv.reshape(1)))
                     if cycle <= 7:
-                        uncertainties.append(uncertainty)
+                        consistency_aug.append(consistency_img)
+                        mean_aug.append(np.mean(mean_img))
                         continue
-                    cor_iou_average = torch.cat((cor_iou_average, cor_iou_single.unsqueeze(0)))
-                    cor_kl_average = torch.cat((cor_kl_average, cor_kl_single.unsqueeze(0)))
                 if cycle <= 7:
-                    stabilities.append(np.mean(uncertainties))
+                    consistency_all.append(np.mean(consistency_aug))
+                    mean_all.append(mean_aug)
                     continue
-                cor_iou_average = torch.mean(cor_iou_average, 0)
-                cor_kl_average = torch.mean(cor_kl_average, 0)
-                stability = torch.sum(cor_iou_average + cor_kl_average * torch.exp(prob_max)) / torch.sum(
-                    torch.exp(prob_max))
-                stabilities.append(stability.item())
-    return stabilities
+    # call = []
+    mean_aug = np.mean(mean_all, axis=0)
+    print(mean_aug)
+    # mean_aug[mean_aug > 1.0] = 1.0
+    # print(mean_aug)
+    # for consistency_aug in consistency_all:
+    #     cau = []
+    #     for consistency_img, mean_img in zip(consistency_aug, mean_aug):
+    #         ci = 1.0
+    #         if not isinstance(consistency_img, list):
+    #             ci = 0
+    #         else:
+    #             for c in consistency_img:
+    #                 ci = min(ci, np.abs(c - mean_img))
+    #         cau.append(ci)
+    #     call.append(np.mean(cau))
+    np.save('{}.npy'.format(cycle), mean_all)
+    return consistency_all
+
+
+def init_uncertainty(task_model, unlabeled_loader):
+    task_model.eval()
+    with torch.no_grad():
+        uncertainity = []
+        for images, _ in unlabeled_loader:
+            # only support 1 batch size
+            aug_images = []
+            aug_features = []
+            for image in images:
+                output = task_model([F.to_tensor(image).cuda()])
+                ref_features = output[0]['features']
+                # start augment
+                flip_image, flip_features = HorizontalFlipFeatures(image, ref_features)
+                aug_images.append(flip_image.cuda())
+                aug_features.append(flip_features)
+                # resize_image, resize_features = resizeFeatures(image, ref_features, 2)
+                # aug_images.append(resize_image.cuda())
+                # aug_features.append(resize_features)
+                # resize_image, resize_features = resizeFeatures(image, ref_features, 0.5)
+                # aug_images.append(resize_image.cuda())
+                # aug_features.append(resize_features)
+                outputs = task_model(aug_images)
+                aug_uncertainty = []
+                for output, aug_feature in zip(outputs, aug_features):
+                    features = output['features']
+                    fpn_uncertainty = []
+                    for k in aug_feature:
+                        single_l1 = torch.mean(torch.abs(aug_feature[k] - features[k]))
+                        fpn_uncertainty.append(single_l1.item())
+                    aug_uncertainty.append(np.mean(fpn_uncertainty))
+                uncertainity.append(-1.0 * np.mean(aug_uncertainty))
+    return uncertainity
 
 
 def main(args):
@@ -221,14 +275,26 @@ def main(args):
     num_images = len(dataset)
     indices = list(range(num_images))
     random.shuffle(indices)
-    labeled_set = indices[:int(num_images * 0.1)]
-    unlabeled_set = indices[int(num_images * 0.1):]
+    if args.init:
+        unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(indices),
+                                      num_workers=args.workers, collate_fn=utils.collate_fn)
+        pre_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+        pre_model.to(device)
+        uncertainty = init_uncertainty(pre_model, unlabeled_loader)
+        arg = np.argsort(uncertainty)
+        labeled_set = list(torch.tensor(indices)[arg][10::10].numpy())
+        unlabeled_set = list(set(indices) - set(labeled_set))
+        # labeled_set = indices[:int(num_images * 0.1)]
+        # unlabeled_set = indices[int(num_images * 0.1):]
+        # print(len(set(labeled_set)) == len(set(labeled_set2)))
+    else:
+        labeled_set = indices[:int(num_images * 0.1)]
+        unlabeled_set = indices[int(num_images * 0.1):]
+    # print(len(set(labeled_set)))
     train_sampler = SubsetRandomSampler(labeled_set)
-    test_sampler = torch.utils.data.SequentialSampler(dataset_test)
-    data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers,
-                                  collate_fn=utils.collate_fn)
+    data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=SequentialSampler(dataset_test),
+                                  num_workers=args.workers, collate_fn=utils.collate_fn)
     for cycle in range(args.cycles):
-
         if args.aspect_ratio_group_factor >= 0:
             group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
             train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
@@ -241,7 +307,7 @@ def main(args):
         print("Creating model")
         task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
-        if cycle == 0:
+        if not args.init and cycle == 0:
             if '2007' in args.dataset:
                 checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
             elif '2012' in args.dataset:
@@ -267,6 +333,7 @@ def main(args):
 
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:int(0.05 * num_images)].numpy())
+            # print(labeled_set)
             unlabeled_set = list(torch.tensor(subset)[arg][int(0.05 * num_images):].numpy())
 
             # Create a new dataloader for the updated labeled dataset
@@ -310,8 +377,10 @@ def main(args):
 
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += list(torch.tensor(subset)[arg][:int(0.05 * num_images)].numpy())
-        unlabeled_set = list(torch.tensor(subset)[arg][int(0.05 * num_images):].numpy())
-
+        # labeled_set += list(torch.tensor(subset)[arg][
+        #                    int(len(subset) / (0.05 * num_images))::int(len(subset) / (0.05 * num_images))].numpy())
+        unlabeled_set = list(set(subset) - set(labeled_set))
+        # print(len(set(labeled_set)))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
 
@@ -359,19 +428,10 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--results-path', default='results', help='path to save detection results (only for voc)')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
-    parser.add_argument(
-        "--test-only",
-        dest="test_only",
-        help="Only test the model",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--pretrained",
-        dest="pretrained",
-        help="Use pre-trained models from the modelzoo",
-        action="store_true",
-    )
-
+    parser.add_argument('-i', "--init", dest="init", help="if use init sample", action="store_true")
+    parser.add_argument("--test-only", dest="test_only", help="Only test the model", action="store_true")
+    parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
+                        action="store_true")
     # distributed training parameters
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')

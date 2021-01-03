@@ -1,4 +1,5 @@
 import torchvision.transforms.functional as F
+import torch.nn.functional as Fun
 import detection.transforms as T
 import random
 import numpy as np
@@ -10,12 +11,45 @@ import os
 import time
 
 
+def HorizontalFlipFeatures(image, features):
+    image = F.to_tensor(image)
+    image = image.flip(-1)
+    new_features = {}
+    for k in features:
+        new_features[k] = features[k].detach().flip(-1)
+    return image, new_features
+
+
 def HorizontalFlip(image, bbox):
     image = F.to_tensor(image)
     height, width = image.shape[-2:]
     image = image.flip(-1)
-    bbox[:, [0, 2]] = width - bbox[:, [2, 0]]
-    return image, bbox
+    b = bbox.clone()
+    b[:, [0, 2]] = width - bbox[:, [2, 0]]
+    return image, b
+
+
+def resizeFeatures(img, features, ratio):
+    if not type(img) == PIL.Image.Image:
+        img = F.to_pil_image(img)
+    w, h = img.size
+    iw = int(w * ratio)
+    ih = int(h * ratio)
+    new_features = {}
+    for k in features:
+        fw = int(features[k].shape(-2) * ratio)
+        fh = int(features[k].shape(-1) * ratio)
+        new_features[k] = Fun.interpolate(features[k].detach(), (fw, fh))
+    return F.to_tensor(img.resize((iw, ih), Image.BILINEAR)), new_features
+
+
+def resize(img, boxes, ratio):
+    if not type(img) == PIL.Image.Image:
+        img = F.to_pil_image(img)
+    w, h = img.size
+    ow = int(w * ratio)
+    oh = int(h * ratio)
+    return F.to_tensor(img.resize((ow, oh), Image.BILINEAR)), boxes * ratio
 
 
 def ColorSwap(image):
@@ -186,15 +220,6 @@ def rotate(image, boxes, angle):
     new_boxes[:, 2] = torch.clamp(new_boxes[:, 2], 0, w)
     new_boxes[:, 3] = torch.clamp(new_boxes[:, 3], 0, h)
     return F.to_tensor(new_image), new_boxes
-
-
-def resize(img, boxes, ratio):
-    if not type(img) == PIL.Image.Image:
-        img = F.to_pil_image(img)
-    w, h = img.size
-    ow = int(w * ratio)
-    oh = int(h * ratio)
-    return F.to_tensor(img.resize((ow, oh), Image.BILINEAR)), boxes * ratio
 
 
 def intersect(boxes1, boxes2):

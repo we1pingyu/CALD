@@ -137,7 +137,8 @@ class RoIHeads(_RoIHeads):
                         "scores": scores[i],
                         "props": props[i],
                         "prob_max": prob_max[i],
-                        "scores_cls": scores_cls[i]
+                        "scores_cls": scores_cls[i],
+                        "features": features
                     }
                 )
 

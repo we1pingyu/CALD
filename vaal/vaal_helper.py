@@ -85,22 +85,22 @@ class VAE(nn.Module):
         mu, logvar = self.fc_mu(z), self.fc_logvar(z)
         z = self.reparameterize(mu, logvar)
         x_recon = self._decode(z)
-        if random.random() < 0.05:
-            f = random.randint(1, 10)
-            input_tensor = x_recon[0].squeeze().data
-            # 从[0,1]转化为[0,255]，再从CHW转为HWC，最后转为cv2
-            input_tensor = input_tensor.clamp_(0, 255).permute(1, 2, 0).type(
-                torch.uint8).cpu().numpy()
-            # RGB转BRG
-            input_tensor = cv2.cvtColor(input_tensor, cv2.COLOR_RGB2BGR)
-            cv2.imwrite('vis/{}_vae.jpg'.format(f), input_tensor)
-            input_tensor = x[0].squeeze().data
-            # 从[0,1]转化为[0,255]，再从CHW转为HWC，最后转为cv2
-            input_tensor = input_tensor.clamp_(0, 255).permute(1, 2, 0).type(
-                torch.uint8).cpu().numpy()
-            # RGB转BRG
-            input_tensor = cv2.cvtColor(input_tensor, cv2.COLOR_RGB2BGR)
-            cv2.imwrite('vis/{}_ori.jpg'.format(f), input_tensor)
+        # if random.random() < 0.05:
+        #     f = random.randint(1, 10)
+        #     input_tensor = x_recon[0].squeeze().data
+        #     # 从[0,1]转化为[0,255]，再从CHW转为HWC，最后转为cv2
+        #     input_tensor = input_tensor.clamp_(0, 255).permute(1, 2, 0).type(
+        #         torch.uint8).cpu().numpy()
+        #     # RGB转BRG
+        #     input_tensor = cv2.cvtColor(input_tensor, cv2.COLOR_RGB2BGR)
+        #     cv2.imwrite('vis/{}_vae.jpg'.format(f), input_tensor)
+        #     input_tensor = x[0].squeeze().data
+        #     # 从[0,1]转化为[0,255]，再从CHW转为HWC，最后转为cv2
+        #     input_tensor = input_tensor.clamp_(0, 255).permute(1, 2, 0).type(
+        #         torch.uint8).cpu().numpy()
+        #     # RGB转BRG
+        #     input_tensor = cv2.cvtColor(input_tensor, cv2.COLOR_RGB2BGR)
+        #     cv2.imwrite('vis/{}_ori.jpg'.format(f), input_tensor)
         return x_recon, z, mu, logvar
 
     def reparameterize(self, mu, logvar):
