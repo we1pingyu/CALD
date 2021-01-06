@@ -21,7 +21,8 @@ def HorizontalFlipFeatures(image, features):
 
 
 def HorizontalFlip(image, bbox):
-    image = F.to_tensor(image)
+    if type(image) == PIL.Image.Image:
+        image = F.to_tensor(image)
     height, width = image.shape[-2:]
     image = image.flip(-1)
     b = bbox.clone()

@@ -40,7 +40,6 @@ class RoIHeads(_RoIHeads):
         # split boxes and scores per image
         pred_boxes = pred_boxes.split(boxes_per_image, 0)
         pred_scores = pred_scores.split(boxes_per_image, 0)
-
         all_boxes = []
         all_scores = []
         all_labels = []
@@ -53,6 +52,8 @@ class RoIHeads(_RoIHeads):
             # create labels for each prediction
             labels = torch.arange(num_classes, device=device)
             labels = labels.view(1, -1).expand_as(scores)
+            scores_cls = scores.unsqueeze(1).expand(scores.shape[0], scores.shape[1], scores.shape[1])
+            scores_cls = scores_cls.reshape(-1, scores.shape[1])
             # remove predictions with the background label
             boxes = boxes[:, 1:]
             scores = scores[:, 1:]
@@ -61,9 +62,7 @@ class RoIHeads(_RoIHeads):
             # batch everything, by making every class prediction be a separate instance
             prob_max = torch.max(scores, 1)[0]
             prob_max = prob_max.unsqueeze(1).expand(prob_max.shape[0], boxes.shape[1])
-            scores_cls = scores.unsqueeze(1).expand(scores.shape[0], scores.shape[1], scores.shape[1])
             boxes = boxes.reshape(-1, 4)
-            scores_cls = scores_cls.reshape(-1, scores.shape[1])
             scores = scores.flatten()
             prob_max = prob_max.flatten()
             labels = labels.flatten()
@@ -71,9 +70,7 @@ class RoIHeads(_RoIHeads):
             # remove low scoring boxes
             inds = torch.nonzero(scores > self.score_thresh).squeeze(1)
             boxes, scores, labels, props, prob_max, scores_cls = boxes[inds], scores[inds], labels[inds], props[inds], \
-                                                                 prob_max[
-                                                                     inds], scores_cls[inds]
-
+                                                                 prob_max[inds], scores_cls[inds]
             # non-maximum suppression, independently done per class
             keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
             # keep only topk scoring predictions
