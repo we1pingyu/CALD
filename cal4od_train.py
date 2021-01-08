@@ -90,10 +90,11 @@ def calcu_iou(A, B):
     return iner_area / (Aarea + Barea - iner_area)
 
 
-def get_uncertainty(task_model, unlabeled_loader, cycle):
+def get_uncertainty(task_model, unlabeled_loader, aves=None):
     task_model.eval()
     with torch.no_grad():
         consistency_all = []
+        mean_all = []
         for images, _ in unlabeled_loader:
             torch.cuda.synchronize()
             # only support 1 batch size
@@ -133,9 +134,9 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 # flip_cutout_image = cutout(flip_image.cuda(), flip_boxes.cuda(), ref_labels)
                 # aug_images.append(flip_cutout_image.cuda())
                 # aug_boxes.append(flip_boxes.cuda())
-                # resize_image, resize_boxes = resize(image, ref_boxes, 0.5)
-                # aug_images.append(resize_image.cuda())
-                # aug_boxes.append(resize_boxes)
+                resize_image, resize_boxes = resize(image, ref_boxes, 0.7)
+                aug_images.append(resize_image.cuda())
+                aug_boxes.append(resize_boxes)
                 # # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_3')
                 # resize_image, resize_boxes = resize(image, ref_boxes, 2.0)
                 # aug_images.append(resize_image.cuda())
@@ -155,10 +156,11 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                 # outputs = task_model(aug_images)
                 consistency_aug = []
                 mean_aug = []
-                i = 0
-                for output, aug_box, aug_image in zip(outputs, aug_boxes, aug_images):
-                    i += 1
-                    consistency_img = 1.0
+                if aves is None:
+                    aves = [0] * len(aug_images)
+                for output, aug_box, aug_image, ave in zip(outputs, aug_boxes, aug_images, aves):
+                    consistency_img = []
+                    mean_img = []
                     boxes, scores_cls, pm, labels = output['boxes'], output['scores_cls'], output['prob_max'], output[
                         'labels']
                     if len(boxes) == 0:
@@ -182,17 +184,32 @@ def get_uncertainty(task_model, unlabeled_loader, cycle):
                         # print(np.sum(p), np.sum(q))
                         if js < 0:
                             js = 0
-                        if cycle <= 7:
-                            consistency_img = min(consistency_img, torch.abs(torch.max(iou) + 0.5 * (1 - js) * (
-                                    ref_pm + pm[torch.argmax(iou)]) - 1.0).item())
-                            continue
-                    if cycle <= 7:
-                        consistency_aug.append(consistency_img)
+                        consistency_img.append(torch.abs(
+                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
+                        mean_img.append(torch.abs(
+                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
                         continue
-                if cycle <= 7:
-                    consistency_all.append(np.mean(consistency_aug))
+                    consistency_aug.append(consistency_img)
+                    mean_aug.append(np.mean(mean_img))
                     continue
-    return consistency_all
+                consistency_all.append(consistency_aug)
+                mean_all.append(mean_aug)
+                continue
+    mean_aug = np.mean(mean_all, axis=0)
+    print(mean_aug)
+    call = []
+    for consistency_aug in consistency_all:
+        cau = []
+        for consistency_img, mean_img in zip(consistency_aug, mean_aug):
+            ci = 1.0
+            if not isinstance(consistency_img, list):
+                ci = 0
+            else:
+                for c in consistency_img:
+                    ci = min(ci, np.abs(c - mean_img))
+            cau.append(ci)
+        call.append(np.mean(cau))
+    return call  # , np.mean(mean_all, axis=0)
 
 
 def init_uncertainty(task_model, unlabeled_loader):
@@ -301,23 +318,19 @@ def main(args):
             #     coco_evaluate(task_model, data_loader_test)
             # elif 'voc' in args.dataset:
             #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            print("Getting stability")
+            # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+            #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            # _, aves = get_uncertainty(task_model, labeled_loader)
             random.shuffle(unlabeled_set)
             subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            print("Getting stability")
-            uncertainty = get_uncertainty(task_model, unlabeled_loader, cycle)
+            uncertainty = get_uncertainty(task_model, unlabeled_loader)
             arg = np.argsort(uncertainty)
 
-            # print(np.mean(uncertainty))
-            # unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
-            #                               num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            # uncertainty = get_uncertainty(task_model, unlabeled_loader)
-            # print(np.mean(uncertainty))
-
             # Update the labeled dataset and the unlabeled dataset, respectively
-            labeled_set += list(torch.tensor(subset)[arg][10::10].numpy())
-            # print(labeled_set)
+            labeled_set += list(torch.tensor(subset)[arg][:int(num_images * 0.05)].numpy())
             unlabeled_set = list(set(subset) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
@@ -329,12 +342,12 @@ def main(args):
                                                                  gamma=args.lr_gamma)
 
         # Start active learning cycles training
-        # if args.test_only:
-        #     if 'coco' in args.dataset:
-        #         coco_evaluate(task_model, data_loader_test)
-        #     elif 'voc' in args.dataset:
-        #         voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
-        #     return
+        if args.test_only:
+            if 'coco' in args.dataset:
+                coco_evaluate(task_model, data_loader_test)
+            elif 'voc' in args.dataset:
+                voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+            return
         print("Start training")
         start_time = time.time()
         for epoch in range(args.start_epoch, args.total_epochs):
@@ -346,21 +359,23 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
-        if cycle == 0:
-            utils.save_on_master({
-                'model': task_model.state_dict(),
-                'args': args},
-                os.path.join('basemodel', 'voc2012_frcnn_1st.pth'))
+        # if cycle == 0:
+        #     utils.save_on_master({
+        #         'model': task_model.state_dict(),
+        #         'args': args},
+        #         os.path.join('basemodel', 'voc2012_frcnn_1st.pth'))
         random.shuffle(unlabeled_set)
         subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                       num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         print("Getting stability")
-        uncertainty = get_uncertainty(task_model, unlabeled_loader, cycle)
+        labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+                                    num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+        # _, aves = get_uncertainty(task_model, labeled_loader)
+        uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
-
         # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += list(torch.tensor(subset)[arg][20::20].numpy())
+        labeled_set += list(torch.tensor(subset)[arg][:int(num_images * 0.05)].numpy())
         unlabeled_set = list(set(subset) - set(labeled_set))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
