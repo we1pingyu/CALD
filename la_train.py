@@ -144,10 +144,16 @@ def main(args):
 
     print("Creating data loaders")
     num_images = len(dataset)
+    if 'voc' in args.dataset:
+        init_num = int(0.1 * num_images)
+        budget_num = int(0.05 * num_images)
+    else:
+        init_num = int(0.01 * num_images)
+        budget_num = int(0.005 * num_images)
     indices = list(range(num_images))
     random.shuffle(indices)
-    labeled_set = indices[:int(num_images * 0.1)]
-    unlabeled_set = indices[int(num_images * 0.1):]
+    labeled_set = indices[:init_num]
+    unlabeled_set = indices[init_num:]
     train_sampler = SubsetRandomSampler(labeled_set)
     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers,
@@ -163,38 +169,37 @@ def main(args):
                                                   collate_fn=utils.collate_fn)
 
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+        if 'voc' in args.dataset:
+            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+        else:
+            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
-        # if cycle == 0:
-        #     if '2007' in args.dataset:
-        #         checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
-        #     elif '2012' in args.dataset:
-        #         checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
-        #     task_model.load_state_dict(checkpoint['model'])
-        #     # if 'coco' in args.dataset:
-        #     #     coco_evaluate(task_model, data_loader_test)
-        #     # elif 'voc' in args.dataset:
-        #     #     voc_evaluate(task_model, data_loader_test, args.dataset)
-        #     random.shuffle(unlabeled_set)
-        #     subset = unlabeled_set
-        #     unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
-        #                                   num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-        #     print("Getting stability")
-        #     uncertainty = get_uncertainty(task_model, unlabeled_loader)
-        #     # print([float('{:.4f}'.format(i)) for i in uncertainty])
-        #     # unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
-        #     #                               num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-        #     # uncertainty = get_uncertainty(task_model, unlabeled_loader)
-        #     # print([float('{:.4f}'.format(i)) for i in uncertainty])
-        #     arg = np.argsort(uncertainty)
-        #
-        #     # Update the labeled dataset and the unlabeled dataset, respectively
-        #     labeled_set += list(torch.tensor(subset)[arg][:int(0.05 * num_images)].numpy())
-        #     unlabeled_set = list(torch.tensor(subset)[arg][int(0.05 * num_images):].numpy())
-        #
-        #     # Create a new dataloader for the updated labeled dataset
-        #     train_sampler = SubsetRandomSampler(labeled_set)
-        #     continue
+        if cycle == 0:
+            if 'voc2007' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+            elif 'voc2012' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
+            elif 'coco' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'coco_frcnn_1st.pth'), map_location='cpu')
+            task_model.load_state_dict(checkpoint['model'])
+            # if 'coco' in args.dataset:
+            #     coco_evaluate(task_model, data_loader_test)
+            # elif 'voc' in args.dataset:
+            #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            random.shuffle(unlabeled_set)
+            subset = unlabeled_set
+            unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            print("Getting stability")
+            uncertainty = get_uncertainty(task_model, unlabeled_loader)
+            arg = np.argsort(uncertainty)
+            # Update the labeled dataset and the unlabeled dataset, respectively
+            labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+            unlabeled_set = list(torch.tensor(subset)[arg][budget_num:].numpy())
+
+            # Create a new dataloader for the updated labeled dataset
+            train_sampler = SubsetRandomSampler(labeled_set)
+            continue
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
@@ -231,14 +236,11 @@ def main(args):
                                       pin_memory=True, collate_fn=utils.collate_fn)
         uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
-
         # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += list(torch.tensor(subset)[arg][:int(0.05 * num_images)].numpy())
-        unlabeled_set = list(torch.tensor(subset)[arg][int(0.05 * num_images):].numpy())
-
+        labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+        unlabeled_set = list(torch.tensor(subset)[arg][budget_num:].numpy())
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
-
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('Training time {}'.format(total_time_str))
@@ -250,8 +252,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
-    parser.add_argument('--dataset', default='voc2007', help='dataset')
+    parser.add_argument('--data-path', default='/data/yuweiping/coco/', help='dataset')
+    parser.add_argument('--dataset', default='coco', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
@@ -274,6 +276,7 @@ if __name__ == "__main__":
     parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                         metavar='W', help='weight decay (default: 1e-4)',
                         dest='weight_decay')
+    parser.add_argument('-i', "--init", dest="init", help="if use init sample", action="store_true")
     parser.add_argument('--lr-step-size', default=8, type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-steps', default=[16, 19], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')

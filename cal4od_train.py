@@ -47,13 +47,9 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
         warmup_iters = min(1000, len(data_loader) - 1)
 
         task_lr_scheduler = utils.warmup_lr_scheduler(task_optimizer, warmup_iters, warmup_factor)
-    # cls_counts = [0] * 20
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-        # for target in targets:
-        #     for label in target['labels']:
-        #         cls_counts[label.item() - 1] += 1
         task_loss_dict = task_model(images, targets)
         task_losses = sum(loss for loss in task_loss_dict.values())
         # reduce losses over all GPUs for logging purposes
@@ -72,7 +68,6 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
             task_lr_scheduler.step()
         metric_logger.update(task_loss=task_losses_reduced)
         metric_logger.update(task_lr=task_optimizer.param_groups[0]["lr"])
-    # print(cls_counts / np.sum(cls_counts))
     return metric_logger
 
 
@@ -153,7 +148,6 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                 outputs = []
                 for aug_image in aug_images:
                     outputs.append(task_model([aug_image])[0])
-                # outputs = task_model(aug_images)
                 consistency_aug = []
                 mean_aug = []
                 if aves is None:
@@ -179,13 +173,11 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                         p = ref_score_cls.cpu().numpy()
                         q = scores_cls[torch.argmax(iou)].cpu().numpy()
                         m = (p + q) / 2
-                        # kldiv = ((np.log(p) * np.log(p / q)).mean() + (np.log(q) * np.log(q / p)).mean())
                         js = 0.5 * scipy.stats.entropy(p, m) + 0.5 * scipy.stats.entropy(q, m)
-                        # print(np.sum(p), np.sum(q))
                         if js < 0:
                             js = 0
                         consistency_img = min(consistency_img, torch.abs(
-                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
+                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - 1.15).item())
                         mean_img.append(torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
                         continue
@@ -193,24 +185,10 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                     mean_aug.append(np.mean(mean_img))
                     continue
                 consistency_all.append(np.mean(consistency_aug))
-                mean_all.append(mean_aug)
                 continue
     mean_aug = np.mean(mean_all, axis=0)
     print(mean_aug)
     return consistency_all
-    call = []
-    for consistency_aug in consistency_all:
-        cau = []
-        for consistency_img, mean_img in zip(consistency_aug, mean_aug):
-            ci = 1.0
-            if not isinstance(consistency_img, list):
-                ci = 0
-            else:
-                for c in consistency_img:
-                    ci = min(ci, np.abs(c - mean_img))
-            cau.append(ci)
-        call.append(np.mean(cau))
-    return call  # , np.mean(mean_all, axis=0)
 
 
 def init_uncertainty(task_model, unlabeled_loader):
@@ -253,9 +231,6 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    # torch.backends.cudnn.enabled = True
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
     utils.init_distributed_mode(args)
     print(args)
 
@@ -276,11 +251,11 @@ def main(args):
     print("Creating data loaders")
     num_images = len(dataset)
     if 'voc' in args.dataset:
-        init_num = 0.1 * num_images
-        budget_num = 0.05 * num_images
+        init_num = int(0.1 * num_images)
+        budget_num = int(0.05 * num_images)
     else:
-        init_num = 0.01 * num_images
-        budget_num = 0.005 * num_images
+        init_num = int(0.01 * num_images)
+        budget_num = int(0.005 * num_images)
     indices = list(range(num_images))
     random.shuffle(indices)
     if args.init:
@@ -292,13 +267,9 @@ def main(args):
         arg = np.argsort(uncertainty)
         labeled_set = list(torch.tensor(indices)[arg][10::10].numpy())
         unlabeled_set = list(set(indices) - set(labeled_set))
-        # labeled_set = indices[:int(num_images * 0.1)]
-        # unlabeled_set = indices[int(num_images * 0.1):]
-        # print(len(set(labeled_set)) == len(set(labeled_set2)))
     else:
         labeled_set = indices[:init_num]
         unlabeled_set = indices[init_num:]
-    # print(len(set(labeled_set)))
     train_sampler = SubsetRandomSampler(labeled_set)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=SequentialSampler(dataset_test),
                                   num_workers=args.workers, collate_fn=utils.collate_fn)
@@ -313,39 +284,41 @@ def main(args):
                                                   collate_fn=utils.collate_fn)
 
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+        if 'voc' in args.dataset:
+            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+        else:
+            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
-        # if not args.init and cycle == 0:
-        #     if '2007' in args.dataset:
-        #         checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
-        #     elif '2012' in args.dataset:
-        #         checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
-        #     task_model.load_state_dict(checkpoint['model'])
-        #     # if 'coco' in args.dataset:
-        #     #     coco_evaluate(task_model, data_loader_test)
-        #     # elif 'voc' in args.dataset:
-        #     #     voc_evaluate(task_model, data_loader_test, args.dataset)
-        #     print("Getting stability")
-        #     # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
-        #     #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-        #     # _, aves = get_uncertainty(task_model, labeled_loader)
-        #     random.shuffle(unlabeled_set)
-        #     if 'coco' in args.dataset:
-        #         subset = unlabeled_set[:5000]
-        #     else:
-        #         subset = unlabeled_set
-        #     unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
-        #                                   num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-        #     uncertainty = get_uncertainty(task_model, unlabeled_loader)
-        #     arg = np.argsort(uncertainty)
-        #
-        #     # Update the labeled dataset and the unlabeled dataset, respectively
-        #     labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-        #     unlabeled_set = list(set(subset) - set(labeled_set))
-        #
-        #     # Create a new dataloader for the updated labeled dataset
-        #     train_sampler = SubsetRandomSampler(labeled_set)
-        #     continue
+        if not args.init and cycle == 0:
+            if 'voc2007' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+            elif 'voc2012' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
+            elif 'coco' in args.dataset:
+                checkpoint = torch.load(os.path.join('basemodel', 'coco_frcnn_1st.pth'), map_location='cpu')
+            task_model.load_state_dict(checkpoint['model'])
+            # if 'coco' in args.dataset:
+            #     coco_evaluate(task_model, data_loader_test)
+            # elif 'voc' in args.dataset:
+            #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            print("Getting stability")
+            random.shuffle(unlabeled_set)
+            if 'coco' in args.dataset:
+                subset = unlabeled_set[:5000]
+            else:
+                subset = unlabeled_set
+            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            uncertainty = get_uncertainty(task_model, unlabeled_loader)
+            arg = np.argsort(uncertainty)
+
+            # Update the labeled dataset and the unlabeled dataset, respectively
+            labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+            unlabeled_set = list(set(subset) - set(labeled_set))
+
+            # Create a new dataloader for the updated labeled dataset
+            train_sampler = SubsetRandomSampler(labeled_set)
+            continue
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
@@ -369,11 +342,11 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
-        if cycle == 0:
-            utils.save_on_master({
-                'model': task_model.state_dict(),
-                'args': args},
-                os.path.join('basemodel', 'coco_frcnn_1st.pth'))
+        # if cycle == 0:
+        #     utils.save_on_master({
+        #         'model': task_model.state_dict(),
+        #         'args': args},
+        #         os.path.join('basemodel', 'coco_frcnn_1st.pth'))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
             subset = unlabeled_set[:5000]
@@ -382,9 +355,6 @@ def main(args):
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                       num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         print("Getting stability")
-        labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
-                                    num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-        # _, aves = get_uncertainty(task_model, labeled_loader)
         uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
         # Update the labeled dataset and the unlabeled dataset, respectively
@@ -404,7 +374,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
+    parser.add_argument('--data-path', default='/data/yuweiping/coco/', help='dataset')
     parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')

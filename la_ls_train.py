@@ -178,10 +178,16 @@ def main(args):
 
     print("Creating data loaders")
     num_images = len(dataset)
+    if 'voc' in args.dataset:
+        init_num = int(0.1 * num_images)
+        budget_num = int(0.05 * num_images)
+    else:
+        init_num = int(0.01 * num_images)
+        budget_num = int(0.005 * num_images)
     indices = list(range(num_images))
     random.shuffle(indices)
-    labeled_set = indices[:int(num_images * 0.1)]
-    unlabeled_set = indices[int(num_images * 0.1):]
+    labeled_set = indices[:init_num]
+    unlabeled_set = indices[init_num:]
     train_sampler = SubsetRandomSampler(labeled_set)
     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers,
@@ -197,9 +203,11 @@ def main(args):
                                                   collate_fn=utils.collate_fn)
 
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+        if 'voc' in args.dataset:
+            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+        else:
+            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
-
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
@@ -234,8 +242,8 @@ def main(args):
         arg = np.argsort(uncertainty)
 
         # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += list(torch.tensor(subset)[arg][:int(0.05 * num_images)].numpy())
-        unlabeled_set = list(torch.tensor(subset)[arg][int(0.05 * num_images):].numpy())
+        labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+        unlabeled_set = list(torch.tensor(subset)[arg][budget_num:].numpy())
 
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
