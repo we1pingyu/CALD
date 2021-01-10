@@ -86,13 +86,10 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
 
 def main(args):
     torch.cuda.set_device(0)
-    random.seed('ywp')
+    random.seed(0)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    # torch.backends.cudnn.enabled = True
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
     utils.init_distributed_mode(args)
     print(args)
 
@@ -109,41 +106,16 @@ def main(args):
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
     print("Creating data loaders")
     num_images = len(dataset)
+    if 'voc' in args.dataset:
+        init_num = int(0.1 * num_images)
+        budget_num = int(0.05 * num_images)
+    else:
+        init_num = int(0.01 * num_images)
+        budget_num = int(0.005 * num_images)
     indices = list(range(num_images))
     random.shuffle(indices)
-    labeled_set = indices[:int(num_images * 0.1)]
-    labeled_set = [60, 2084, 1878, 834, 3865, 2576, 1883, 304, 619, 4865, 9, 646, 1090, 3840, 2242, 3729, 3593, 4317,
-                   1498, 3475, 4176, 806, 3832, 2385, 4033, 4889, 4839, 3877, 4468, 4251, 3465, 4457, 1884, 3120, 2424,
-                   4052, 229, 330, 1343, 4731, 3505, 2610, 177, 849, 1714, 3077, 4024, 868, 1467, 1673, 4125, 2267,
-                   1536, 3720, 1872, 216, 4107, 142, 106, 1219, 1406, 3883, 3209, 2244, 4882, 3483, 1354, 236, 3576,
-                   544, 1281, 1561, 2433, 4784, 1747, 919, 400, 2741, 2747, 4389, 2899, 971, 1450, 2115, 457, 1647,
-                   4646, 2286, 1506, 2043, 2467, 1499, 3698, 439, 1083, 2798, 1221, 855, 3050, 4764, 2451, 2485, 2624,
-                   1586, 2793, 3411, 64, 4677, 4048, 2398, 4118, 3464, 4692, 4167, 4712, 2730, 219, 2579, 1754, 4246,
-                   891, 875, 2162, 2153, 4131, 3538, 3347, 3172, 3146, 3087, 1925, 1839, 2476, 551, 2717, 4382, 1087,
-                   239, 4065, 1476, 4982, 79, 4394, 2764, 3524, 2426, 3144, 1101, 4419, 1430, 1102, 702, 3229, 847,
-                   4513, 3151, 1776, 4136, 357, 1497, 4519, 2057, 2936, 3011, 2036, 4910, 4521, 3105, 4749, 755, 817,
-                   2112, 3808, 1842, 3797, 2696, 2463, 4605, 3934, 2155, 808, 854, 2083, 1212, 369, 1840, 2458, 4358,
-                   2613, 2163, 4197, 24, 861, 4815, 2348, 335, 1468, 3037, 1263, 4860, 1798, 2317, 4658, 2223, 3567,
-                   844, 4462, 34, 3236, 1882, 648, 1733, 783, 705, 3900, 556, 4894, 4220, 4110, 2349, 3030, 4960, 4430,
-                   4769, 1577, 570, 249, 1590, 4352, 2266, 186, 4215, 4005, 793, 320, 4418, 4026, 827, 172, 4122, 4347,
-                   3014, 456, 31, 4175, 1765, 4283, 1225, 714, 4422, 4561, 2686, 824, 3010, 833, 3994, 4330, 1082, 2997,
-                   2246, 2675, 4380, 3277, 2350, 968, 3430, 3251, 1095, 565, 3499, 989, 2739, 1606, 3932, 852, 3764,
-                   918, 4905, 1378, 2226, 248, 3170, 3055, 298, 423, 4661, 251, 1017, 4667, 4640, 2132, 2748, 3938,
-                   1206, 2142, 1148, 829, 2847, 684, 936, 1053, 3613, 1591, 2276, 997, 1452, 4477, 2697, 3834, 411,
-                   1072, 2119, 2506, 1262, 742, 200, 3131, 4289, 1309, 2833, 2092, 4626, 4798, 4628, 1487, 2551, 1014,
-                   4654, 3299, 772, 1437, 3363, 3552, 1566, 2377, 4343, 1887, 3872, 4170, 2895, 4121, 2760, 3985, 3515,
-                   4001, 1408, 408, 2314, 2750, 3217, 1144, 2442, 1650, 3141, 3416, 3235, 4595, 2945, 1996, 4566, 1809,
-                   228, 3484, 525, 2280, 4164, 1257, 3374, 4143, 4767, 464, 2015, 4664, 1608, 2405, 4630, 2372, 2178,
-                   4431, 84, 2950, 4320, 4492, 2894, 3743, 1810, 4707, 2396, 3233, 1812, 1571, 1451, 145, 3395, 4019,
-                   2356, 603, 3385, 3002, 4433, 962, 1463, 639, 4785, 2011, 1347, 1122, 1945, 621, 2766, 4738, 3951,
-                   4941, 787, 1539, 2660, 474, 2526, 262, 3220, 277, 1393, 2429, 1699, 4309, 2919, 1298, 2870, 3015,
-                   421, 1689, 3730, 1986, 4461, 473, 3591, 4010, 656, 2595, 583, 497, 2323, 2584, 1858, 3930, 3844,
-                   4644, 4181, 2723, 118, 196, 4219, 209, 2848, 3621, 1003, 97, 1190, 3972, 1848, 373, 5005, 1198, 985,
-                   4705, 4311, 2872, 4736, 3246, 4689, 4135, 4318, 2626, 4981, 1723, 2378, 1527, 1731, 2234, 2634, 3556,
-                   311, 4039, 4387, 3774, 3310, 2859, 1865, 1292, 3069, 99, 735, 4279, 4203, 935, 3455, 4895, 3215,
-                   2131, 1112, 2740]
-
-    unlabeled_set = indices[int(num_images * 0.1):]
+    labeled_set = indices[:init_num]
+    unlabeled_set = indices[init_num:]
     train_sampler = SubsetRandomSampler(labeled_set)
     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers,
@@ -159,23 +131,26 @@ def main(args):
                                                   collate_fn=utils.collate_fn)
 
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+        if 'voc' in args.dataset:
+            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+        else:
+            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
-        if cycle == 8:
-            checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
-            task_model.load_state_dict(checkpoint['model'])
-            # if 'coco' in args.dataset:
-            #     coco_evaluate(task_model, data_loader_test)
-            # elif 'voc' in args.dataset:
-            #     voc_evaluate(task_model, data_loader_test, args.dataset)
-            random.shuffle(unlabeled_set)
-            # Update the labeled dataset and the unlabeled dataset, respectively
-            labeled_set += unlabeled_set[:int(0.05 * num_images)]
-            unlabeled_set = unlabeled_set[int(0.05 * num_images):]
-
-            # Create a new dataloader for the updated labeled dataset
-            train_sampler = SubsetRandomSampler(labeled_set)
-            continue
+        # if cycle == 8:
+        #     checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+        #     task_model.load_state_dict(checkpoint['model'])
+        #     # if 'coco' in args.dataset:
+        #     #     coco_evaluate(task_model, data_loader_test)
+        #     # elif 'voc' in args.dataset:
+        #     #     voc_evaluate(task_model, data_loader_test, args.dataset)
+        #     random.shuffle(unlabeled_set)
+        #     # Update the labeled dataset and the unlabeled dataset, respectively
+        #     labeled_set += unlabeled_set[:budget_num]
+        #     unlabeled_set = unlabeled_set[budget_num:]
+        #
+        #     # Create a new dataloader for the updated labeled dataset
+        #     train_sampler = SubsetRandomSampler(labeled_set)
+        #     continue
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
@@ -198,14 +173,17 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset)
+        if cycle == 0:
+            utils.save_on_master({
+                'model': task_model.state_dict(),
+                'args': args},
+                os.path.join('basemodel', 'coco_frcnn_1st.pth'))
         random.shuffle(unlabeled_set)
         # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += unlabeled_set[:int(0.05 * num_images)]
-        unlabeled_set = unlabeled_set[int(0.05 * num_images):]
-
+        labeled_set += unlabeled_set[:budget_num]
+        unlabeled_set = unlabeled_set[budget_num:]
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
-
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('Training time {}'.format(total_time_str))
@@ -217,7 +195,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
+    parser.add_argument('--data-path', default='/data/yuweiping/coco/', help='dataset')
     parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')

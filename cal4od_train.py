@@ -159,7 +159,7 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                 if aves is None:
                     aves = [0] * len(aug_images)
                 for output, aug_box, aug_image, ave in zip(outputs, aug_boxes, aug_images, aves):
-                    consistency_img = []
+                    consistency_img = 1.0
                     mean_img = []
                     boxes, scores_cls, pm, labels = output['boxes'], output['scores_cls'], output['prob_max'], output[
                         'labels']
@@ -184,7 +184,7 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                         # print(np.sum(p), np.sum(q))
                         if js < 0:
                             js = 0
-                        consistency_img.append(torch.abs(
+                        consistency_img = min(consistency_img, torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
                         mean_img.append(torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
@@ -192,11 +192,12 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                     consistency_aug.append(consistency_img)
                     mean_aug.append(np.mean(mean_img))
                     continue
-                consistency_all.append(consistency_aug)
+                consistency_all.append(np.mean(consistency_aug))
                 mean_all.append(mean_aug)
                 continue
     mean_aug = np.mean(mean_all, axis=0)
     print(mean_aug)
+    return consistency_all
     call = []
     for consistency_aug in consistency_all:
         cau = []
@@ -274,6 +275,12 @@ def main(args):
 
     print("Creating data loaders")
     num_images = len(dataset)
+    if 'voc' in args.dataset:
+        init_num = 0.1 * num_images
+        budget_num = 0.05 * num_images
+    else:
+        init_num = 0.01 * num_images
+        budget_num = 0.005 * num_images
     indices = list(range(num_images))
     random.shuffle(indices)
     if args.init:
@@ -289,8 +296,8 @@ def main(args):
         # unlabeled_set = indices[int(num_images * 0.1):]
         # print(len(set(labeled_set)) == len(set(labeled_set2)))
     else:
-        labeled_set = indices[:int(num_images * 0.1)]
-        unlabeled_set = indices[int(num_images * 0.1):]
+        labeled_set = indices[:init_num]
+        unlabeled_set = indices[init_num:]
     # print(len(set(labeled_set)))
     train_sampler = SubsetRandomSampler(labeled_set)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=SequentialSampler(dataset_test),
@@ -308,34 +315,37 @@ def main(args):
         print("Creating model")
         task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
-        if not args.init and cycle == 0:
-            if '2007' in args.dataset:
-                checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
-            elif '2012' in args.dataset:
-                checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
-            task_model.load_state_dict(checkpoint['model'])
-            # if 'coco' in args.dataset:
-            #     coco_evaluate(task_model, data_loader_test)
-            # elif 'voc' in args.dataset:
-            #     voc_evaluate(task_model, data_loader_test, args.dataset)
-            print("Getting stability")
-            # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
-            #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            # _, aves = get_uncertainty(task_model, labeled_loader)
-            random.shuffle(unlabeled_set)
-            subset = unlabeled_set
-            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
-                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            uncertainty = get_uncertainty(task_model, unlabeled_loader)
-            arg = np.argsort(uncertainty)
-
-            # Update the labeled dataset and the unlabeled dataset, respectively
-            labeled_set += list(torch.tensor(subset)[arg][:int(num_images * 0.05)].numpy())
-            unlabeled_set = list(set(subset) - set(labeled_set))
-
-            # Create a new dataloader for the updated labeled dataset
-            train_sampler = SubsetRandomSampler(labeled_set)
-            continue
+        # if not args.init and cycle == 0:
+        #     if '2007' in args.dataset:
+        #         checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
+        #     elif '2012' in args.dataset:
+        #         checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
+        #     task_model.load_state_dict(checkpoint['model'])
+        #     # if 'coco' in args.dataset:
+        #     #     coco_evaluate(task_model, data_loader_test)
+        #     # elif 'voc' in args.dataset:
+        #     #     voc_evaluate(task_model, data_loader_test, args.dataset)
+        #     print("Getting stability")
+        #     # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+        #     #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+        #     # _, aves = get_uncertainty(task_model, labeled_loader)
+        #     random.shuffle(unlabeled_set)
+        #     if 'coco' in args.dataset:
+        #         subset = unlabeled_set[:5000]
+        #     else:
+        #         subset = unlabeled_set
+        #     unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+        #                                   num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+        #     uncertainty = get_uncertainty(task_model, unlabeled_loader)
+        #     arg = np.argsort(uncertainty)
+        #
+        #     # Update the labeled dataset and the unlabeled dataset, respectively
+        #     labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+        #     unlabeled_set = list(set(subset) - set(labeled_set))
+        #
+        #     # Create a new dataloader for the updated labeled dataset
+        #     train_sampler = SubsetRandomSampler(labeled_set)
+        #     continue
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
@@ -359,13 +369,16 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
-        # if cycle == 0:
-        #     utils.save_on_master({
-        #         'model': task_model.state_dict(),
-        #         'args': args},
-        #         os.path.join('basemodel', 'voc2012_frcnn_1st.pth'))
+        if cycle == 0:
+            utils.save_on_master({
+                'model': task_model.state_dict(),
+                'args': args},
+                os.path.join('basemodel', 'coco_frcnn_1st.pth'))
         random.shuffle(unlabeled_set)
-        subset = unlabeled_set
+        if 'coco' in args.dataset:
+            subset = unlabeled_set[:5000]
+        else:
+            subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                       num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         print("Getting stability")
@@ -375,7 +388,7 @@ def main(args):
         uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
         # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += list(torch.tensor(subset)[arg][:int(num_images * 0.05)].numpy())
+        labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
         unlabeled_set = list(set(subset) - set(labeled_set))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)

@@ -175,7 +175,7 @@ COCO_CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
 
 
 @torch.no_grad()
-def coco_evaluate(model, data_loader, classwise=True):
+def coco_evaluate(model, data_loader, classwise=True, feature=False):
     device = 'cuda'
     n_threads = torch.get_num_threads()
     # FIXME remove this and make paste_masks_in_image run on the GPU
@@ -192,7 +192,10 @@ def coco_evaluate(model, data_loader, classwise=True):
         images = list(img.to(device) for img in images)
         torch.cuda.synchronize()
         model_time = time.time()
-        _, outputs = model(images)
+        if feature:
+            _, outputs = model(images)
+        else:
+            outputs = model(images)
         outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
 
