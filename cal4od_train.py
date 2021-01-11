@@ -177,7 +177,7 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                         if js < 0:
                             js = 0
                         consistency_img = min(consistency_img, torch.abs(
-                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - 1.15).item())
+                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - 1.1).item())
                         mean_img.append(torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
                         continue
@@ -185,6 +185,7 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                     mean_aug.append(np.mean(mean_img))
                     continue
                 consistency_all.append(np.mean(consistency_aug))
+                mean_all.append(mean_aug)
                 continue
     mean_aug = np.mean(mean_all, axis=0)
     print(mean_aug)
@@ -289,13 +290,9 @@ def main(args):
         else:
             task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
-        if not args.init and cycle == 0:
-            if 'voc2007' in args.dataset:
-                checkpoint = torch.load(os.path.join('basemodel', 'voc2007_frcnn_1st.pth'), map_location='cpu')
-            elif 'voc2012' in args.dataset:
-                checkpoint = torch.load(os.path.join('basemodel', 'voc2012_frcnn_1st.pth'), map_location='cpu')
-            elif 'coco' in args.dataset:
-                checkpoint = torch.load(os.path.join('basemodel', 'coco_frcnn_1st.pth'), map_location='cpu')
+        if not args.init and cycle == 0 and args.skip:
+            checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
+                                    map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
             # if 'coco' in args.dataset:
             #     coco_evaluate(task_model, data_loader_test)
@@ -304,7 +301,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:5000]
+                subset = unlabeled_set[:20000]
             else:
                 subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -323,7 +320,6 @@ def main(args):
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
                                                                  gamma=args.lr_gamma)
-
         # Start active learning cycles training
         if args.test_only:
             if 'coco' in args.dataset:
@@ -342,14 +338,13 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
-        # if cycle == 0:
-        #     utils.save_on_master({
-        #         'model': task_model.state_dict(),
-        #         'args': args},
-        #         os.path.join('basemodel', 'coco_frcnn_1st.pth'))
+        if not args.skip and cycle == 0:
+            utils.save_on_master({
+                'model': task_model.state_dict(), 'args': args},
+                os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:5000]
+            subset = unlabeled_set[:20000]
         else:
             subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -374,12 +369,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/data/yuweiping/coco/', help='dataset')
+    parser.add_argument('-p', '--data-path', default='/data/yuweiping/coco/', help='dataset path')
     parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
+    parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
+                        help='path to save checkpoint of first cycle')
     parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
@@ -404,11 +401,14 @@ if __name__ == "__main__":
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
-    parser.add_argument('-p', '--results-path', default='results', help='path to save detection results (only for voc)')
+    parser.add_argument('-rp', '--results-path', default='results',
+                        help='path to save detection results (only for voc)')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
     parser.add_argument('-i', "--init", dest="init", help="if use init sample", action="store_true")
     parser.add_argument("--test-only", dest="test_only", help="Only test the model", action="store_true")
+    parser.add_argument('-s', "--skip", dest="skip", help="Skip first cycle and use pretrained model to save time",
+                        action="store_true")
     parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
                         action="store_true")
     # distributed training parameters

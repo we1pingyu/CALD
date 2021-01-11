@@ -196,6 +196,9 @@ def coco_evaluate(model, data_loader, classwise=False, feature=False):
             _, outputs = model(images)
         else:
             outputs = model(images)
+        for output in outputs:
+            if 'features' in output.keys():
+                del output['features']
         outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
 
@@ -215,8 +218,8 @@ def coco_evaluate(model, data_loader, classwise=False, feature=False):
     coco_evaluator.accumulate()
     coco_evaluator.summarize()
 
-    cat_ids = coco.get_cat_ids(cat_names=COCO_CLASSES)
     if classwise:  # Compute per-category AP
+        cat_ids = coco.get_cat_ids(cat_names=COCO_CLASSES)
         # Compute per-category AP
         # from https://github.com/facebookresearch/detectron2/
         precisions = coco_evaluator.coco_eval['bbox'].eval['precision']
