@@ -26,6 +26,7 @@ import sys
 import numpy as np
 import math
 
+import torchvision.transforms.functional as F
 import torch
 import torch.utils.data
 from torch import nn
@@ -46,6 +47,7 @@ from detection import transforms as T
 from detection.train import *
 
 from ll4al.data.sampler import SubsetSequentialSampler
+from cal4od.cal4od_helper import *
 
 
 def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
@@ -101,56 +103,50 @@ def calcu_iou(A, B):
     return iner_area / (Aarea + Barea - iner_area)
 
 
-def get_uncertainty(task_model, unlabeled_loader):
+def get_uncertainty(task_model, unlabeled_loader, aves=None):
     task_model.eval()
-    uncertainties = []
-
     with torch.no_grad():
-        stabilities = []
-        for images, labels in unlabeled_loader:
-            images = list(img.cuda() for img in images)
+        stability_all = []
+        for images, _ in unlabeled_loader:
             torch.cuda.synchronize()
             # only support 1 batch size
+            aug_images = []
             for image in images:
-                gaussian_images = [image]
-                for n in range(1, 7):
-                    x = image + torch.randn(image.size()).cuda() * (n * 8) / 255.0
-                    gaussian_images.append(x)
-                outputs = task_model(gaussian_images)
-                if outputs[0]['boxes'].shape[0] == 0:
-                    stabilities.append(0.0)
+                output = task_model([F.to_tensor(image).cuda()])
+                ref_boxes, prob_max, ref_labels = output[0]['boxes'], output[0]['prob_max'], output[0]['labels']
+                if ref_boxes.shape[0] == 0:
+                    stability_all.append(0.0)
                     break
-                corresponding_boxes_average = torch.empty([0, outputs[0]['boxes'].shape[0]]).cuda()
-                for i, output in enumerate(outputs):
-                    if i == 0:
-                        reference_boxes, prob_max = output['boxes'], output['prob_max']
-                        P = torch.max(1 - prob_max)
-                    else:
-                        boxes = output['boxes']
-                        if boxes.shape[0] == 0:
-                            corresponding_boxes_average = torch.cat(
-                                (corresponding_boxes_average, torch.zeros([1, outputs[0]['boxes'].shape[0]]).cuda()))
-                            continue
-                        corresponding_boxes_single = torch.tensor([]).cuda()
-                        for reference_box in reference_boxes:
-                            width = torch.min(reference_box[2], boxes[:, 2]) - torch.max(reference_box[0],
-                                                                                         boxes[:, 0])
-                            height = torch.min(reference_box[3], boxes[:, 3]) - torch.max(reference_box[1],
-                                                                                          boxes[:, 1])
-                            Aarea = (reference_box[2] - reference_box[0]) * (reference_box[3] - reference_box[1])
-                            Barea = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-                            iner_area = width * height
-                            iou = iner_area / (Aarea + Barea - iner_area)
-                            iou[width < 0] = 0.0
-                            iou[height < 0] = 0.0
-                            corresponding_boxes_single = torch.cat(
-                                (corresponding_boxes_single, torch.max(iou).reshape(1)))
-                        corresponding_boxes_average = torch.cat(
-                            (corresponding_boxes_average, corresponding_boxes_single.unsqueeze(0)))
-                corresponding_boxes_average = torch.mean(corresponding_boxes_average, 0)
-                stability = torch.sum(corresponding_boxes_average * prob_max) / torch.sum(prob_max)
-                stabilities.append((P - stability.cpu().item()) * -1)
-    return stabilities
+                stability_img = [0.0] * len(ref_boxes)
+                U = torch.max(1 - prob_max).item()
+                for i in range(1, 7):
+                    ga_image = GaussianNoise(image, i * 8)
+                    aug_images.append(ga_image.cuda())
+                    # draw_PIL_image(ga_image, ref_boxes, ref_labels, i)
+                outputs = []
+                for aug_image in aug_images:
+                    outputs.append(task_model([aug_image])[0])
+                for output in outputs:
+                    boxes = output['boxes']
+                    if len(boxes) == 0:
+                        continue
+                    i = 0
+                    for ab in ref_boxes:
+                        width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
+                        height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
+                        Aarea = (ab[2] - ab[0]) * (ab[3] - ab[1])
+                        Barea = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                        iner_area = width * height
+                        iou = iner_area / (Aarea + Barea - iner_area)
+                        iou[width < 0] = 0.0
+                        iou[height < 0] = 0.0
+                        stability_img[i] += torch.max(iou).item()
+                        i += 1
+                stability_img = np.array(stability_img) / 6.0
+                prob_max = prob_max.cpu().numpy()
+                stability_img = np.sum(prob_max * stability_img) / np.sum(prob_max)
+                stability_all.append(stability_img - U)
+    return stability_all
 
 
 def main(args):
@@ -170,9 +166,11 @@ def main(args):
 
     if 'voc2007' in args.dataset:
         dataset, num_classes = get_dataset(args.dataset, "trainval", get_transform(train=True), args.data_path)
+        dataset_aug, _ = get_dataset(args.dataset, "trainval", None, args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
     else:
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset_aug, _ = get_dataset(args.dataset, "train", None, args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
 
     print("Creating data loaders")
@@ -221,7 +219,7 @@ def main(args):
                 subset = unlabeled_set[:20000]
             else:
                 subset = unlabeled_set
-            unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
+            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
             uncertainty = get_uncertainty(task_model, unlabeled_loader)
             arg = np.argsort(uncertainty)
@@ -265,7 +263,7 @@ def main(args):
             subset = unlabeled_set[:20000]
         else:
             subset = unlabeled_set
-        unlabeled_loader = DataLoader(dataset, batch_size=1,
+        unlabeled_loader = DataLoader(dataset_aug, batch_size=1,
                                       sampler=SubsetSequentialSampler(subset), num_workers=args.workers,
                                       # more convenient if we maintain the order of subset
                                       pin_memory=True, collate_fn=utils.collate_fn)

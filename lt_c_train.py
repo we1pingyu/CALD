@@ -46,6 +46,7 @@ from detection import transforms as T
 from detection.train import *
 
 from ll4al.data.sampler import SubsetSequentialSampler
+import pickle
 
 
 def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
@@ -185,7 +186,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:20000]
+                subset = unlabeled_set[:5000]
             else:
                 subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -195,6 +196,9 @@ def main(args):
 
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+            file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
+            pickle.dump(labeled_set, file)  # 保存list到文件
+            file.close()
             unlabeled_set = list(set(subset) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
@@ -229,7 +233,10 @@ def main(args):
                 'args': args},
                 os.path.join('/home/lmy/ywp/code/basemodel', 'voc2012_frcnn_1st.pth'))
         random.shuffle(unlabeled_set)
-        subset = unlabeled_set
+        if 'coco' in args.dataset:
+            subset = unlabeled_set[:5000]
+        else:
+            subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset, batch_size=1,
                                       sampler=SubsetSequentialSampler(subset), num_workers=args.workers,
                                       # more convenient if we maintain the order of subset
@@ -238,6 +245,9 @@ def main(args):
         arg = np.argsort(uncertainty)
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+        file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
+        pickle.dump(labeled_set, file)  # 保存list到文件
+        file.close()
         unlabeled_set = list(torch.tensor(subset)[arg][budget_num:].numpy())
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
@@ -252,13 +262,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('-p', '--data-path', default='/data/yuweiping/coco/', help='dataset path')
-    parser.add_argument('--dataset', default='voc2007', help='dataset')
+    parser.add_argument('-p', '--data-path', default='/data/yuweiping/voc/', help='dataset path')
+    parser.add_argument('--dataset', default='voc2012', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
-    parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
+    parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/voc/',
                         help='path to save checkpoint of first cycle')
     parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')

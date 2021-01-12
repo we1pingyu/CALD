@@ -1,3 +1,5 @@
+import pickle
+
 import datetime
 import os
 import time
@@ -33,43 +35,6 @@ from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
 from cal4od.cal4od_helper import *
 from ll4al.data.sampler import SubsetSequentialSampler
 from detection.frcnn_la import fasterrcnn_resnet50_fpn_feature
-
-
-def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
-    task_model.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('task_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Cycle:[{}] Epoch: [{}]'.format(cycle, epoch)
-
-    task_lr_scheduler = None
-
-    if epoch == 0:
-        warmup_factor = 1. / 1000
-        warmup_iters = min(1000, len(data_loader) - 1)
-
-        task_lr_scheduler = utils.warmup_lr_scheduler(task_optimizer, warmup_iters, warmup_factor)
-    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
-        images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-        task_loss_dict = task_model(images, targets)
-        task_losses = sum(loss for loss in task_loss_dict.values())
-        # reduce losses over all GPUs for logging purposes
-        task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
-        task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
-        task_loss_value = task_losses_reduced.item()
-        if not math.isfinite(task_loss_value):
-            print("Loss is {}, stopping training".format(task_loss_value))
-            print(task_loss_dict_reduced)
-            sys.exit(1)
-
-        task_optimizer.zero_grad()
-        task_losses.backward()
-        task_optimizer.step()
-        if task_lr_scheduler is not None:
-            task_lr_scheduler.step()
-        metric_logger.update(task_loss=task_losses_reduced)
-        metric_logger.update(task_lr=task_optimizer.param_groups[0]["lr"])
-    return metric_logger
 
 
 def calcu_iou(A, B):
@@ -109,12 +74,6 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                 flip_image, flip_boxes = HorizontalFlip(image, ref_boxes)
                 aug_images.append(flip_image.cuda())
                 aug_boxes.append(flip_boxes.cuda())
-                ga_image = GaussianNoise(image, 8)
-                aug_images.append(ga_image.cuda())
-                aug_boxes.append(ref_boxes.cuda())
-                color_adjust_image = ColorAdjust(image, 1)
-                aug_images.append(color_adjust_image.cuda())
-                aug_boxes.append(reference_boxes)
                 # draw_PIL_image(flip_image, flip_boxes, ref_labels, '_1')
                 # color_swap_image = ColorSwap(image)
                 # aug_images.append(color_swap_image.cuda())
@@ -130,6 +89,9 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                 #     aug_images.append(sp_image.cuda())
                 #     aug_boxes.append(ref_boxes)
                 #     draw_PIL_image(sp_image, ref_boxes, ref_labels, i)
+                ga_image = GaussianNoise(image, 8)
+                aug_images.append(ga_image.cuda())
+                aug_boxes.append(ref_boxes.cuda())
                 cutout_image = cutout(image, ref_boxes, ref_labels)
                 aug_images.append(cutout_image.cuda())
                 aug_boxes.append(ref_boxes)
@@ -183,7 +145,7 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                         if js < 0:
                             js = 0
                         consistency_img = min(consistency_img, torch.abs(
-                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - 1.15).item())
+                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - 1.1).item())
                         mean_img.append(torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
                         continue
@@ -198,53 +160,8 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
     return consistency_all
 
 
-def init_uncertainty(task_model, unlabeled_loader):
-    task_model.eval()
-    with torch.no_grad():
-        uncertainity = []
-        for images, _ in unlabeled_loader:
-            # only support 1 batch size
-            aug_images = []
-            aug_features = []
-            for image in images:
-                output = task_model([F.to_tensor(image).cuda()])
-                ref_features = output[0]['features']
-                # start augment
-                flip_image, flip_features = HorizontalFlipFeatures(image, ref_features)
-                aug_images.append(flip_image.cuda())
-                aug_features.append(flip_features)
-                # resize_image, resize_features = resizeFeatures(image, ref_features, 2)
-                # aug_images.append(resize_image.cuda())
-                # aug_features.append(resize_features)
-                # resize_image, resize_features = resizeFeatures(image, ref_features, 0.5)
-                # aug_images.append(resize_image.cuda())
-                # aug_features.append(resize_features)
-                outputs = task_model(aug_images)
-                aug_uncertainty = []
-                for output, aug_feature in zip(outputs, aug_features):
-                    features = output['features']
-                    fpn_uncertainty = []
-                    for k in aug_feature:
-                        single_l1 = torch.mean(torch.abs(aug_feature[k] - features[k]))
-                        fpn_uncertainty.append(single_l1.item())
-                    aug_uncertainty.append(np.mean(fpn_uncertainty))
-                uncertainity.append(-1.0 * np.mean(aug_uncertainty))
-    return uncertainity
-
-
 def main(args):
-    torch.cuda.set_device(0)
-    random.seed(0)
-    torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    torch.cuda.manual_seed_all(0)
-    utils.init_distributed_mode(args)
-    print(args)
-
     device = torch.device(args.device)
-
-    # Data loading code
-    print("Loading data")
 
     if 'voc2007' in args.dataset:
         dataset, num_classes = get_dataset(args.dataset, "trainval", get_transform(train=True), args.data_path)
@@ -254,125 +171,33 @@ def main(args):
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
         dataset_aug, _ = get_dataset(args.dataset, "train", None, args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
-
-    print("Creating data loaders")
-    num_images = len(dataset)
     if 'voc' in args.dataset:
-        init_num = int(0.1 * num_images)
-        budget_num = int(0.05 * num_images)
+        task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
     else:
-        init_num = int(0.01 * num_images)
-        budget_num = int(0.005 * num_images)
-    indices = list(range(num_images))
-    random.shuffle(indices)
-    if args.init:
-        unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(indices),
-                                      num_workers=args.workers, collate_fn=utils.collate_fn)
-        pre_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
-        pre_model.to(device)
-        uncertainty = init_uncertainty(pre_model, unlabeled_loader)
-        arg = np.argsort(uncertainty)
-        labeled_set = list(torch.tensor(indices)[arg][10::10].numpy())
-        unlabeled_set = list(set(indices) - set(labeled_set))
-    else:
-        labeled_set = indices[:init_num]
-        unlabeled_set = indices[init_num:]
-    train_sampler = SubsetRandomSampler(labeled_set)
-    data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=SequentialSampler(dataset_test),
-                                  num_workers=args.workers, collate_fn=utils.collate_fn)
-    for cycle in range(args.cycles):
-        if args.aspect_ratio_group_factor >= 0:
-            group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
-            train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
-        else:
-            train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
-
-        data_loader = torch.utils.data.DataLoader(dataset, batch_sampler=train_batch_sampler, num_workers=args.workers,
-                                                  collate_fn=utils.collate_fn)
-
-        print("Creating model")
-        if 'voc' in args.dataset:
-            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
-        else:
-            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
-        task_model.to(device)
-        if not args.init and cycle == 0 and args.skip:
-            checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
-                                    map_location='cpu')
-            task_model.load_state_dict(checkpoint['model'])
-            # if 'coco' in args.dataset:
-            #     coco_evaluate(task_model, data_loader_test)
-            # elif 'voc' in args.dataset:
-            #     voc_evaluate(task_model, data_loader_test, args.dataset)
-            print("Getting stability")
-            random.shuffle(unlabeled_set)
-            if 'coco' in args.dataset:
-                subset = unlabeled_set[:5000]
-            else:
-                subset = unlabeled_set
-            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
-                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            uncertainty = get_uncertainty(task_model, unlabeled_loader)
-            arg = np.argsort(np.array(uncertainty))
-
-            # Update the labeled dataset and the unlabeled dataset, respectively
-            labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-            file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
-            pickle.dump(labeled_set, file)  # 保存list到文件
-            file.close()
-            unlabeled_set = list(set(subset) - set(labeled_set))
-
-            # Create a new dataloader for the updated labeled dataset
-            train_sampler = SubsetRandomSampler(labeled_set)
-            continue
-        params = [p for p in task_model.parameters() if p.requires_grad]
-        task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-        task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
-                                                                 gamma=args.lr_gamma)
-        # Start active learning cycles training
-        if args.test_only:
-            if 'coco' in args.dataset:
-                coco_evaluate(task_model, data_loader_test)
-            elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
-            return
-        print("Start training")
-        start_time = time.time()
-        for epoch in range(args.start_epoch, args.total_epochs):
-            train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, args.print_freq)
-            task_lr_scheduler.step()
-            # evaluate after pre-set epoch
-            if (epoch + 1) == args.total_epochs:
-                if 'coco' in args.dataset:
-                    coco_evaluate(task_model, data_loader_test)
-                elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
-        if not args.skip and cycle == 0:
-            utils.save_on_master({
-                'model': task_model.state_dict(), 'args': args},
-                os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
-        random.shuffle(unlabeled_set)
-        if 'coco' in args.dataset:
-            subset = unlabeled_set[:5000]
-        else:
-            subset = unlabeled_set
-        unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
-                                      num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-        print("Getting stability")
-        uncertainty = get_uncertainty(task_model, unlabeled_loader)
-        arg = np.argsort(uncertainty)
-        # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-        file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
-        pickle.dump(labeled_set, file)  # 保存list到文件
-        file.close()
-        unlabeled_set = list(set(subset) - set(labeled_set))
-        # Create a new dataloader for the updated labeled dataset
-        train_sampler = SubsetRandomSampler(labeled_set)
-
-        total_time = time.time() - start_time
-        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        print('Training time {}'.format(total_time_str))
+        task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
+    task_model.to(device)
+    checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
+                            map_location='cpu')
+    task_model.load_state_dict(checkpoint['model'])
+    print("Getting stability")
+    for cycle in range(0, 7):
+        file = open('/home/lmy/ywp/code/active_learning_for_object_detection/vis/lt_c_{}.pkl'.format(cycle), 'rb')
+        lt_c_set = pickle.load(file)
+        file = open('/home/lmy/ywp/code/active_learning_for_object_detection/vis/cal4of_{}.pkl'.format(cycle), 'rb')
+        cal_set = pickle.load(file)
+        # a = [x for x in lt_c_set if x in cal_set]
+        # b = [y for y in (lt_c_set + cal_set) if y not in a]
+        _cal_set = [x for x in cal_set if x not in lt_c_set]  # 在list1列表中而不在list2列表中
+        _lt_c_set = [y for y in lt_c_set if y not in cal_set]
+        print(len(_cal_set), len(_lt_c_set))
+        labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(_cal_set),
+                                    num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+        uncertainty = get_uncertainty(task_model, labeled_loader)
+        print('cal4od:{}'.format(np.mean(uncertainty)))
+        labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(_lt_c_set),
+                                    num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+        uncertainty = get_uncertainty(task_model, labeled_loader)
+        print('lt_c:{}'.format(np.mean(uncertainty)))
 
 
 if __name__ == "__main__":
@@ -381,13 +206,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('-p', '--data-path', default='/data/yuweiping/coco/', help='dataset path')
-    parser.add_argument('--dataset', default='voc2007', help='dataset')
+    parser.add_argument('-p', '--data-path', default='/home/lmy/ywp/data/coco/', help='dataset path')
+    parser.add_argument('--dataset', default='coco', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
-    parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
+    parser.add_argument('-cp', '--first-checkpoint-path', default='/home/lmy/ywp/code/basemodel/',
                         help='path to save checkpoint of first cycle')
     parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')

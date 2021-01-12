@@ -70,9 +70,9 @@ def ColorAdjust(image, factor):
 
 
 def GaussianNoise(image, std=1):
-    image = image + np.random.normal(0.0, std, image.shape)
-    image = np.clip(image, 0, 255)
-    return F.to_tensor(image)
+    image = F.to_tensor(image)
+    x = image + torch.randn(image.size()) * std / 255.0
+    return x
 
 
 def SaltPepperNoise(image, prob):
