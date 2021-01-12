@@ -146,11 +146,11 @@ def main(args):
     print("Creating data loaders")
     num_images = len(dataset)
     if 'voc' in args.dataset:
-        init_num = int(0.1 * num_images)
-        budget_num = int(0.05 * num_images)
+        init_num = 500
+        budget_num = 500
     else:
-        init_num = int(0.01 * num_images)
-        budget_num = int(0.005 * num_images)
+        init_num = 5000
+        budget_num = 1000
     indices = list(range(num_images))
     random.shuffle(indices)
     labeled_set = indices[:init_num]
@@ -266,7 +266,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', default='voc2012', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
-    parser.add_argument('-b', '--batch-size', default=2, type=int,
+    parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/voc/',
                         help='path to save checkpoint of first cycle')

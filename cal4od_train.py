@@ -109,12 +109,12 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                 flip_image, flip_boxes = HorizontalFlip(image, ref_boxes)
                 aug_images.append(flip_image.cuda())
                 aug_boxes.append(flip_boxes.cuda())
-                ga_image = GaussianNoise(image, 8)
-                aug_images.append(ga_image.cuda())
-                aug_boxes.append(ref_boxes.cuda())
-                color_adjust_image = ColorAdjust(image, 1)
-                aug_images.append(color_adjust_image.cuda())
-                aug_boxes.append(reference_boxes)
+                # ga_image = GaussianNoise(image, 8)
+                # aug_images.append(ga_image.cuda())
+                # aug_boxes.append(ref_boxes.cuda())
+                # color_adjust_image = ColorAdjust(image, 1)
+                # aug_images.append(color_adjust_image.cuda())
+                # aug_boxes.append(ref_boxes)
                 # draw_PIL_image(flip_image, flip_boxes, ref_labels, '_1')
                 # color_swap_image = ColorSwap(image)
                 # aug_images.append(color_swap_image.cuda())
@@ -258,11 +258,11 @@ def main(args):
     print("Creating data loaders")
     num_images = len(dataset)
     if 'voc' in args.dataset:
-        init_num = int(0.1 * num_images)
-        budget_num = int(0.05 * num_images)
+        init_num = 500
+        budget_num = 500
     else:
-        init_num = int(0.01 * num_images)
-        budget_num = int(0.005 * num_images)
+        init_num = 5000
+        budget_num = 1000
     indices = list(range(num_images))
     random.shuffle(indices)
     if args.init:
@@ -317,9 +317,9 @@ def main(args):
 
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-            file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
-            pickle.dump(labeled_set, file)  # 保存list到文件
-            file.close()
+            # file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
+            # pickle.dump(labeled_set, file)  # 保存list到文件
+            # file.close()
             unlabeled_set = list(set(subset) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
@@ -362,9 +362,9 @@ def main(args):
         uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
         # Update the labeled dataset and the unlabeled dataset, respectively
-        labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-        file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
-        pickle.dump(labeled_set, file)  # 保存list到文件
+        # labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+        # file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
+        # pickle.dump(labeled_set, file)  # 保存list到文件
         file.close()
         unlabeled_set = list(set(subset) - set(labeled_set))
         # Create a new dataloader for the updated labeled dataset
@@ -385,7 +385,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
-    parser.add_argument('-b', '--batch-size', default=2, type=int,
+    parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
                         help='path to save checkpoint of first cycle')
