@@ -86,11 +86,16 @@ def calcu_iou(A, B):
     return iner_area / (Aarea + Barea - iner_area)
 
 
-def get_uncertainty(task_model, unlabeled_loader, aves=None):
+def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
+    for aug in augs:
+        if aug not in ['flip', 'multi_ga', 'color_adjust', 'color_swap', 'multi_color_adjust', 'multi_sp', 'cut_out',
+                       'multi_cut_out', 'multi_resize', 'larger_resize', 'smaller_resize', 'rotation']:
+            print('{} is not in the pre-set augmentations!'.format(aug))
     task_model.eval()
     with torch.no_grad():
         consistency_all = []
         mean_all = []
+        cls_all = []
         for images, _ in unlabeled_loader:
             torch.cuda.synchronize()
             # only support 1 batch size
@@ -100,69 +105,100 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                 output = task_model([F.to_tensor(image).cuda()])
                 ref_boxes, prob_max, ref_scores_cls, ref_labels = output[0]['boxes'], output[0][
                     'prob_max'], output[0]['scores_cls'], output[0]['labels']
+                cls_corr = [0] * (num_cls - 1)
+                for p, l in zip(prob_max, ref_labels):
+                    # if p.item() > 0.4:
+                    #     cls_corr[l - 1] += p.item()
+                    cls_corr[l - 1] = max(cls_corr[l - 1], p.item())
+                cls_corrs = [cls_corr]
                 if output[0]['boxes'].shape[0] == 0:
                     consistency_all.append(0.0)
+                    cls_all.append(np.mean(cls_corrs, axis=0))
                     break
-                U = torch.max(1 - prob_max).item()
                 # start augment
-                # image = SaltPepperNoise(image, 0.05)
-                flip_image, flip_boxes = HorizontalFlip(image, ref_boxes)
-                aug_images.append(flip_image.cuda())
-                aug_boxes.append(flip_boxes.cuda())
-                # ga_image = GaussianNoise(image, 8)
-                # aug_images.append(ga_image.cuda())
-                # aug_boxes.append(ref_boxes.cuda())
-                # color_adjust_image = ColorAdjust(image, 1)
-                # aug_images.append(color_adjust_image.cuda())
-                # aug_boxes.append(ref_boxes)
-                # draw_PIL_image(flip_image, flip_boxes, ref_labels, '_1')
-                # color_swap_image = ColorSwap(image)
-                # aug_images.append(color_swap_image.cuda())
-                # aug_boxes.append(reference_boxes)
-                # draw_PIL_image(color_swap_image, reference_boxes, reference_labels, 'color_swap')
-                # for i in range(2, 6):
-                #     color_adjust_image = ColorAdjust(image, i)
-                #     aug_images.append(color_adjust_image.cuda())
-                #     aug_boxes.append(reference_boxes)
-                #     draw_PIL_image(color_adjust_image, reference_boxes, reference_labels, i)
-                # for i in range(1, 7):
-                #     sp_image = SaltPepperNoise(image, i * 0.05)
-                #     aug_images.append(sp_image.cuda())
-                #     aug_boxes.append(ref_boxes)
-                #     draw_PIL_image(sp_image, ref_boxes, ref_labels, i)
-                cutout_image = cutout(image, ref_boxes, ref_labels)
-                aug_images.append(cutout_image.cuda())
-                aug_boxes.append(ref_boxes)
-                # draw_PIL_image(cutout_image, ref_boxes, ref_labels, '_2')
-                # flip_cutout_image = cutout(flip_image.cuda(), flip_boxes.cuda(), ref_labels)
-                # aug_images.append(flip_cutout_image.cuda())
-                # aug_boxes.append(flip_boxes.cuda())
-                resize_image, resize_boxes = resize(image, ref_boxes, 0.8)
-                aug_images.append(resize_image.cuda())
-                aug_boxes.append(resize_boxes)
-                # # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_3')
-                resize_image, resize_boxes = resize(image, ref_boxes, 1.2)
-                aug_images.append(resize_image.cuda())
-                aug_boxes.append(resize_boxes)
-                # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_4')
-                # rot_image, rot_boxes = rotate(flip_image, flip_boxes, 10)
-                # aug_images.append(rot_image.cuda())
-                # aug_boxes.append(rot_boxes)
-                # draw_PIL_image(rot_image, ref_boxes, ref_labels, 1)
-                # rot_image, rot_boxes = rotate(flip_image, flip_boxes, -10)
-                # aug_images.append(rot_image.cuda())
-                # aug_boxes.append(rot_boxes)
-                # draw_PIL_image(rot_image, ref_boxes, ref_labels, 2)
+                if 'flip' in augs:
+                    flip_image, flip_boxes = HorizontalFlip(image, ref_boxes)
+                    aug_images.append(flip_image.cuda())
+                    aug_boxes.append(flip_boxes.cuda())
+                if 'multi_ga' in augs:
+                    for i in range(1, 7):
+                        ga_image = GaussianNoise(image, i * 8)
+                        aug_images.append(ga_image.cuda())
+                        aug_boxes.append(ref_boxes.cuda())
+                if 'color_adjust' in augs:
+                    color_adjust_image = ColorAdjust(image, 1.5)
+                    aug_images.append(color_adjust_image.cuda())
+                    aug_boxes.append(ref_boxes)
+                    # draw_PIL_image(color_adjust_image, ref_boxes, ref_labels, 'color')
+                if 'color_swap' in augs:
+                    color_swap_image = ColorSwap(image)
+                    aug_images.append(color_swap_image.cuda())
+                    aug_boxes.append(ref_boxes)
+                    # draw_PIL_image(color_swap_image, ref_boxes, ref_labels, 'color_swap')
+                if 'multi_color_adjust' in augs:
+                    for i in range(2, 6):
+                        color_adjust_image = ColorAdjust(image, i)
+                        aug_images.append(color_adjust_image.cuda())
+                        aug_boxes.append(reference_boxes)
+                        # draw_PIL_image(color_adjust_image, reference_boxes, reference_labels, i)
+                if 'multi_sp' in augs:
+                    for i in range(1, 7):
+                        sp_image = SaltPepperNoise(image, i * 0.05)
+                        aug_images.append(sp_image.cuda())
+                        aug_boxes.append(ref_boxes)
+                        draw_PIL_image(sp_image, ref_boxes, ref_labels, i)
+                if 'cut_out' in augs:
+                    cutout_image = cutout(image, ref_boxes, ref_labels, 2)
+                    aug_images.append(cutout_image.cuda())
+                    aug_boxes.append(ref_boxes)
+                if 'multi_cut_out' in augs:
+                    for i in range(1, 5):
+                        cutout_image = cutout(image, ref_boxes, ref_labels, i)
+                        aug_images.append(cutout_image.cuda())
+                        aug_boxes.append(ref_boxes)
+                        # draw_PIL_image(cutout_image, ref_boxes, ref_labels, '_2')
+                if 'multi_resize' in augs:
+                    for i in range(7, 10):
+                        resize_image, resize_boxes = resize(image, ref_boxes, i * 0.1)
+                        aug_images.append(resize_image.cuda())
+                        aug_boxes.append(resize_boxes)
+                # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_3')
+                if 'larger_resize' in augs:
+                    resize_image, resize_boxes = resize(image, ref_boxes, 1.2)
+                    aug_images.append(resize_image.cuda())
+                    aug_boxes.append(resize_boxes)
+                    # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_4')
+                if 'smaller_resize' in augs:
+                    resize_image, resize_boxes = resize(image, ref_boxes, 0.8)
+                    aug_images.append(resize_image.cuda())
+                    aug_boxes.append(resize_boxes)
+                    # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_4')
+                if 'rotation' in augs:
+                    rot_image, rot_boxes = rotate(image, ref_boxes, 5)
+                    aug_images.append(rot_image.cuda())
+                    aug_boxes.append(rot_boxes)
+                    # draw_PIL_image(rot_image, rot_boxes, ref_labels, 'rot')
+                    # rot_image, rot_boxes = rotate(flip_image, flip_boxes, -10)
+                    # aug_images.append(rot_image.cuda())
+                    # aug_boxes.append(rot_boxes)
+                    # draw_PIL_image(rot_image, ref_boxes, ref_labels, 2)
                 outputs = []
                 for aug_image in aug_images:
                     outputs.append(task_model([aug_image])[0])
                 consistency_aug = []
                 mean_aug = []
+
                 for output, aug_box, aug_image in zip(outputs, aug_boxes, aug_images):
                     consistency_img = 1.0
                     mean_img = []
                     boxes, scores_cls, pm, labels = output['boxes'], output['scores_cls'], output['prob_max'], output[
                         'labels']
+                    cls_corr = [0] * (num_cls - 1)
+                    for p, l in zip(pm, labels):
+                        # if p.item() > 0.4:
+                        #     cls_corr[l - 1] += p.item()
+                        cls_corr[l - 1] = max(cls_corr[l - 1], p.item())
+                    cls_corrs.append(cls_corr)
                     if len(boxes) == 0:
                         consistency_aug.append(0.0)
                         mean_aug.append(0.0)
@@ -186,16 +222,52 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - 1.15).item())
                         mean_img.append(torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
-                        continue
                     consistency_aug.append(consistency_img)
                     mean_aug.append(np.mean(mean_img))
-                    continue
                 consistency_all.append(np.mean(consistency_aug))
                 mean_all.append(mean_aug)
-                continue
+                cls_corrs = np.mean(np.array(cls_corrs), axis=0)
+                cls_all.append(cls_corrs)
     mean_aug = np.mean(mean_all, axis=0)
     print(mean_aug)
-    return consistency_all
+    return consistency_all, cls_all
+
+
+def cls_kldiv(labeled_loader, cls_corrs, budget):
+    cls_inds = []
+    result = []
+    for _, targets in labeled_loader:
+        for target in targets:
+            cls_corr = [0] * cls_corrs[0].shape[0]
+            for l in target['labels']:
+                cls_corr[l - 1] += 1
+            result.append(cls_corr)
+    # print(np.mean(np.array(result), axis=0))
+    while len(cls_inds) < budget:
+        max = 0
+        max_ind = 0
+        for i in range(0, len(cls_corrs)):
+            if type(cls_corrs[i]) == np.ndarray:
+                # print(result)
+                # print(cls_corrs[i])
+                if np.sum(cls_corrs[i]) == 0:
+                    max_ind = i
+                    break
+                if np.sum(result) == 0:
+                    p = np.ones(cls_corrs[i].shape) / cls_corrs[i].shape[0]
+                else:
+                    p = np.mean(np.array(result), axis=0) / np.sum(np.mean(np.array(result), axis=0))
+                q = cls_corrs[i] / np.sum(cls_corrs[i])
+                # print(p, q)
+                m = (p + q) / 2
+                js = 0.5 * scipy.stats.entropy(p, m) + 0.5 * scipy.stats.entropy(q, m)
+                if js > max:
+                    max = js
+                    max_ind = i
+        result.append(cls_corrs[max_ind])
+        cls_corrs[max_ind] = 0
+        cls_inds.append(max_ind)
+    return cls_inds
 
 
 def init_uncertainty(task_model, unlabeled_loader):
@@ -276,10 +348,11 @@ def main(args):
         unlabeled_set = list(set(indices) - set(labeled_set))
     else:
         labeled_set = indices[:init_num]
-        unlabeled_set = indices[init_num:]
+        unlabeled_set = list(set(indices) - set(labeled_set))
     train_sampler = SubsetRandomSampler(labeled_set)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=SequentialSampler(dataset_test),
                                   num_workers=args.workers, collate_fn=utils.collate_fn)
+    augs = ['flip', 'cut_out', 'smaller_resize', 'rotation']  # 'larger_resize'
     for cycle in range(args.cycles):
         if args.aspect_ratio_group_factor >= 0:
             group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
@@ -307,20 +380,31 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:5000]
+                subset = unlabeled_set[:10000]
             else:
                 subset = unlabeled_set
-            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
-                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            uncertainty = get_uncertainty(task_model, unlabeled_loader)
-            arg = np.argsort(np.array(uncertainty))
-
-            # Update the labeled dataset and the unlabeled dataset, respectively
-            labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-            # file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
-            # pickle.dump(labeled_set, file)  # 保存list到文件
-            # file.close()
-            unlabeled_set = list(set(subset) - set(labeled_set))
+            if args.mutual:
+                unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                              num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+                uncertainty, _cls_corrs = get_uncertainty(task_model, unlabeled_loader, augs, num_classes)
+                arg = np.argsort(np.array(uncertainty))
+                cls_corrs_set = arg[:int(args.mr * budget_num)]
+                cls_corrs = [_cls_corrs[i] for i in cls_corrs_set]
+                labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+                                            num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+                tobe_labeled_set = cls_kldiv(labeled_loader, cls_corrs, budget_num)
+                # Update the labeled dataset and the unlabeled dataset, respectively
+                tobe_labeled_set = list(torch.tensor(subset)[arg][tobe_labeled_set].numpy())
+                labeled_set += tobe_labeled_set
+                unlabeled_set = list(set(indices) - set(labeled_set))
+            else:
+                unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                              num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+                uncertainty, _ = get_uncertainty(task_model, unlabeled_loader, augs, num_classes)
+                arg = np.argsort(np.array(uncertainty))
+                # Update the labeled dataset and the unlabeled dataset, respectively
+                labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+                unlabeled_set = list(set(indices) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
             train_sampler = SubsetRandomSampler(labeled_set)
@@ -353,20 +437,32 @@ def main(args):
                 os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:5000]
+            subset = unlabeled_set[:10000]
         else:
             subset = unlabeled_set
-        unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
-                                      num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         print("Getting stability")
-        uncertainty = get_uncertainty(task_model, unlabeled_loader)
-        arg = np.argsort(uncertainty)
-        # Update the labeled dataset and the unlabeled dataset, respectively
-        # labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-        # file = open('vis/cal4od_{}_{}.pkl'.format(args.dataset, cycle), "wb")
-        # pickle.dump(labeled_set, file)  # 保存list到文件
-        file.close()
-        unlabeled_set = list(set(subset) - set(labeled_set))
+        if args.mutual:
+            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            uncertainty, _cls_corrs = get_uncertainty(task_model, unlabeled_loader, augs, num_classes)
+            arg = np.argsort(np.array(uncertainty))
+            cls_corrs_set = arg[:int(args.mr * budget_num)]
+            cls_corrs = [_cls_corrs[i] for i in cls_corrs_set]
+            labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+                                        num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            tobe_labeled_set = cls_kldiv(labeled_loader, cls_corrs, budget_num)
+            # Update the labeled dataset and the unlabeled dataset, respectively
+            tobe_labeled_set = list(torch.tensor(subset)[arg][tobe_labeled_set].numpy())
+            labeled_set += tobe_labeled_set
+            unlabeled_set = list(set(indices) - set(labeled_set))
+        else:
+            unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                          num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            uncertainty, _ = get_uncertainty(task_model, unlabeled_loader, augs, num_classes)
+            arg = np.argsort(np.array(uncertainty))
+            # Update the labeled dataset and the unlabeled dataset, respectively
+            labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+            unlabeled_set = list(set(indices) - set(labeled_set))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
 
@@ -421,6 +517,9 @@ if __name__ == "__main__":
     parser.add_argument("--test-only", dest="test_only", help="Only test the model", action="store_true")
     parser.add_argument('-s', "--skip", dest="skip", help="Skip first cycle and use pretrained model to save time",
                         action="store_true")
+    parser.add_argument('-m', "--mutual", dest="mutual", help="use mutual information",
+                        action="store_true")
+    parser.add_argument('-mr', default=1.2, type=float, help='mutual range')
     parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
                         action="store_true")
     # distributed training parameters

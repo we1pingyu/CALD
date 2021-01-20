@@ -119,6 +119,7 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                     break
                 stability_img = [0.0] * len(ref_boxes)
                 U = torch.max(1 - prob_max).item()
+                # print(U)
                 for i in range(1, 7):
                     ga_image = GaussianNoise(image, i * 8)
                     aug_images.append(ga_image.cuda())
@@ -176,11 +177,11 @@ def main(args):
     print("Creating data loaders")
     num_images = len(dataset)
     if 'voc' in args.dataset:
-        init_num = int(0.1 * num_images)
-        budget_num = int(0.05 * num_images)
+        init_num = 500
+        budget_num = 500
     else:
-        init_num = int(0.01 * num_images)
-        budget_num = int(0.005 * num_images)
+        init_num = 5000
+        budget_num = 1000
     indices = list(range(num_images))
     random.shuffle(indices)
     labeled_set = indices[:init_num]
@@ -216,7 +217,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:20000]
+                subset = unlabeled_set[:5000]
             else:
                 subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -226,7 +227,7 @@ def main(args):
 
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-            unlabeled_set = list(set(subset) - set(labeled_set))
+            unlabeled_set = list(set(indices) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
             train_sampler = SubsetRandomSampler(labeled_set)
@@ -260,7 +261,7 @@ def main(args):
                 os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:20000]
+            subset = unlabeled_set[:5000]
         else:
             subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1,
@@ -293,7 +294,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
-    parser.add_argument('-b', '--batch-size', default=2, type=int,
+    parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
                         help='path to save checkpoint of first cycle')

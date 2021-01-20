@@ -85,7 +85,7 @@ def SaltPepperNoise(image, prob):
     return image
 
 
-def cutout(image, boxes, labels, fill_val=0, bbox_remove_thres=0.4, bbox_min_thres=0.1):
+def cutout(image, boxes, labels, cut_num=2, fill_val=0, bbox_remove_thres=0.4, bbox_min_thres=0.1):
     '''
         Cutout augmentation
         image: A PIL image
@@ -126,7 +126,7 @@ def cutout(image, boxes, labels, fill_val=0, bbox_remove_thres=0.4, bbox_min_thr
         cutout_arr = torch.full((original_channel, int(bottom) - int(top), int(right) - int(left)), fill_val)
         image[:, int(top):int(bottom), int(left):int(right)] = cutout_arr
         count += 1
-        if count >= 2:
+        if count >= cut_num:
             break
     # draw_PIL_image(image, boxes, labels)
     return image
@@ -257,7 +257,7 @@ def draw_PIL_image(image, boxes, labels, name):
     draw = ImageDraw.Draw(new_image)
     boxes = boxes.tolist()
     for i in range(len(boxes)):
-        draw.rectangle(xy=boxes[i], outline=label_color_map[rev_label_map[labels[i]]])
+        draw.rectangle(xy=boxes[i])  # , outline=label_color_map[rev_label_map[labels[i]]])
     new_image.save('vis/{}.jpg'.format(name))
 
 

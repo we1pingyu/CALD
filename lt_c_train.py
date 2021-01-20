@@ -186,7 +186,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:5000]
+                subset = unlabeled_set[:10000]
             else:
                 subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -196,10 +196,10 @@ def main(args):
 
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-            file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
-            pickle.dump(labeled_set, file)  # 保存list到文件
-            file.close()
-            unlabeled_set = list(set(subset) - set(labeled_set))
+            # file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
+            # pickle.dump(labeled_set, file)  # 保存list到文件
+            # file.close()
+            unlabeled_set = list(set(indices) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
             train_sampler = SubsetRandomSampler(labeled_set)
@@ -227,14 +227,13 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset)
-        if cycle == 0:
+        if not args.skip and cycle == 0:
             utils.save_on_master({
-                'model': task_model.state_dict(),
-                'args': args},
-                os.path.join('/home/lmy/ywp/code/basemodel', 'voc2012_frcnn_1st.pth'))
+                'model': task_model.state_dict(), 'args': args},
+                os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:5000]
+            subset = unlabeled_set[:10000]
         else:
             subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset, batch_size=1,
@@ -245,10 +244,10 @@ def main(args):
         arg = np.argsort(uncertainty)
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
-        file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
-        pickle.dump(labeled_set, file)  # 保存list到文件
-        file.close()
-        unlabeled_set = list(torch.tensor(subset)[arg][budget_num:].numpy())
+        # file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
+        # pickle.dump(labeled_set, file)  # 保存list到文件
+        # file.close()
+        unlabeled_set = list(set(indices) - set(labeled_set))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
         total_time = time.time() - start_time
