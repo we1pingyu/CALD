@@ -242,30 +242,44 @@ def cls_kldiv(labeled_loader, cls_corrs, budget):
             for l in target['labels']:
                 cls_corr[l - 1] += 1
             result.append(cls_corr)
-    # print(np.mean(np.array(result), axis=0))
+    for a in list(np.where(np.sum(cls_corrs, axis=1) == 0)[0]):
+        cls_inds.append(a)
+        result.append(cls_corrs[a])
     while len(cls_inds) < budget:
-        max = 0
-        max_ind = 0
-        for i in range(0, len(cls_corrs)):
-            if type(cls_corrs[i]) == np.ndarray:
-                # print(result)
-                # print(cls_corrs[i])
-                if np.sum(cls_corrs[i]) == 0:
-                    max_ind = i
-                    break
-                if np.sum(result) == 0:
-                    p = np.ones(cls_corrs[i].shape) / cls_corrs[i].shape[0]
-                else:
-                    p = np.mean(np.array(result), axis=0) / np.sum(np.mean(np.array(result), axis=0))
-                q = cls_corrs[i] / np.sum(cls_corrs[i])
-                # print(p, q)
-                m = (p + q) / 2
-                js = 0.5 * scipy.stats.entropy(p, m) + 0.5 * scipy.stats.entropy(q, m)
-                if js > max:
-                    max = js
-                    max_ind = i
-        result.append(cls_corrs[max_ind])
-        cls_corrs[max_ind] = 0
+        # max = 0
+        # max_ind = 0
+        # for i in range(0, len(cls_corrs)):
+        #     if type(cls_corrs[i]) == np.ndarray:
+        #         # print(result)
+        #         # print(cls_corrs[i])
+        #         if np.sum(cls_corrs[i]) == 0:
+        #             max_ind = i
+        #             break
+        #         # if np.sum(result) == 0:
+        #         #     p = np.ones(cls_corrs[i].shape) / cls_corrs[i].shape[0]
+        #         # else:
+        #         #     p = np.mean(np.array(result), axis=0) / np.sum(np.mean(np.array(result), axis=0))
+        #         # q = cls_corrs[i] / np.sum(cls_corrs[i])
+        #         # # print(p, q)
+        #         # m = (p + q) / 2
+        #         # js = 0.5 * scipy.stats.entropy(p, m) + 0.5 * scipy.stats.entropy(q, m)
+        #
+        #         if js > max:
+        #             max = js
+        #             max_ind = i
+        # batch cls_corrs together to accelerate calculating
+        KLDivLoss = nn.KLDivLoss(reduction='none')
+        _cls_corrs = torch.tensor(cls_corrs)
+        _result = torch.tensor(np.mean(np.array(result), axis=0)).unsqueeze(0)
+        # p = torch.nn.functional.softmax(_result, -1)
+        # q = torch.nn.functional.softmax(_cls_corrs, -1)
+        p = _result / torch.sum(_result, dim=1).unsqueeze(1)
+        q = _cls_corrs / torch.sum(_cls_corrs, dim=1).unsqueeze(1)
+        log_mean = ((p + q) / 2).log()
+        jsdiv = torch.sum(KLDivLoss(log_mean, p), dim=1) / 2 + torch.sum(KLDivLoss(log_mean, q), dim=1) / 2
+        jsdiv[cls_inds] = -1
+        max_ind = torch.argmax(jsdiv).item()
+        cls_corrs[max_ind] = torch.zeros(cls_corrs[0].shape)
         cls_inds.append(max_ind)
     return cls_inds
 
