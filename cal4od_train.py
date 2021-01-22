@@ -219,7 +219,7 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                         if js < 0:
                             js = 0
                         consistency_img = min(consistency_img, torch.abs(
-                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - 1.15).item())
+                            torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - args.bp).item())
                         mean_img.append(torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
                     consistency_aug.append(consistency_img)
@@ -344,7 +344,7 @@ def main(args):
         pre_model.to(device)
         uncertainty = init_uncertainty(pre_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
-        labeled_set = list(torch.tensor(indices)[arg][10::10].numpy())
+        labeled_set = list(torch.tensor(indices)[arg][2000:2500].numpy())
         unlabeled_set = list(set(indices) - set(labeled_set))
     else:
         labeled_set = indices[:init_num]
@@ -380,7 +380,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:10000]
+                subset = unlabeled_set[:5000]
             else:
                 subset = unlabeled_set
             if args.mutual:
@@ -437,7 +437,7 @@ def main(args):
                 os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:10000]
+            subset = unlabeled_set[:5000]
         else:
             subset = unlabeled_set
         print("Getting stability")
@@ -520,6 +520,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', "--mutual", dest="mutual", help="use mutual information",
                         action="store_true")
     parser.add_argument('-mr', default=1.2, type=float, help='mutual range')
+    parser.add_argument('-bp', default=1.15, type=float, help='base point')
     parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
                         action="store_true")
     # distributed training parameters
