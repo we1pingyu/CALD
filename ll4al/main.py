@@ -23,7 +23,6 @@ import torchvision.models as models
 from torchvision.datasets import CIFAR100, CIFAR10
 
 # Utils
-import visdom
 from tqdm import tqdm
 
 # Custom
@@ -52,6 +51,8 @@ test_transform = T.Compose([
     T.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])
     # T.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)) # CIFAR-100
 ])
+
+
 #
 # cifar10_train = CIFAR10('/home/omnisky/ywp/data', train=True, download=True, transform=train_transform)
 # cifar10_unlabeled = CIFAR10('/home/omnisky/ywp/data', train=True, download=True, transform=test_transform)

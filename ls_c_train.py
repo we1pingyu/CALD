@@ -156,8 +156,6 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    torch.backends.cudnn.enabled = True
-    utils.init_distributed_mode(args)
     print(args)
 
     device = torch.device(args.device)
@@ -255,10 +253,10 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset)
-        if not args.skip and cycle == 0:
-            utils.save_on_master({
-                'model': task_model.state_dict(), 'args': args},
-                os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
+        # if not args.skip and cycle == 0:
+        #     utils.save_on_master({
+        #         'model': task_model.state_dict(), 'args': args},
+        #         os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
             subset = unlabeled_set[:5000]

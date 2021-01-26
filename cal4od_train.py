@@ -271,15 +271,14 @@ def cls_kldiv(labeled_loader, cls_corrs, budget):
         KLDivLoss = nn.KLDivLoss(reduction='none')
         _cls_corrs = torch.tensor(cls_corrs)
         _result = torch.tensor(np.mean(np.array(result), axis=0)).unsqueeze(0)
-        # p = torch.nn.functional.softmax(_result, -1)
-        # q = torch.nn.functional.softmax(_cls_corrs, -1)
-        p = _result / torch.sum(_result, dim=1).unsqueeze(1)
-        q = _cls_corrs / torch.sum(_cls_corrs, dim=1).unsqueeze(1)
+        p = torch.nn.functional.softmax(_result, -1)
+        q = torch.nn.functional.softmax(_cls_corrs, -1)
+        # p = _result / torch.sum(_result, dim=1).unsqueeze(1)
+        # q = _cls_corrs / torch.sum(_cls_corrs, dim=1).unsqueeze(1)
         log_mean = ((p + q) / 2).log()
         jsdiv = torch.sum(KLDivLoss(log_mean, p), dim=1) / 2 + torch.sum(KLDivLoss(log_mean, q), dim=1) / 2
         jsdiv[cls_inds] = -1
         max_ind = torch.argmax(jsdiv).item()
-        cls_corrs[max_ind] = torch.zeros(cls_corrs[0].shape)
         cls_inds.append(max_ind)
     return cls_inds
 
@@ -324,7 +323,6 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    utils.init_distributed_mode(args)
     print(args)
 
     device = torch.device(args.device)
@@ -394,7 +392,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:5000]
+                subset = unlabeled_set[:10000]
             else:
                 subset = unlabeled_set
             if args.mutual:
@@ -451,7 +449,7 @@ def main(args):
                 os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:5000]
+            subset = unlabeled_set[:10000]
         else:
             subset = unlabeled_set
         print("Getting stability")

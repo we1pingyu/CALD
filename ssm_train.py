@@ -66,11 +66,9 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
         warmup_iters = min(1000, len(data_loader) - 1)
 
         task_lr_scheduler = utils.warmup_lr_scheduler(task_optimizer, warmup_iters, warmup_factor)
-
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
         task_loss_dict = task_model(images, targets)
         task_losses = sum(loss for loss in task_loss_dict.values())
         # reduce losses over all GPUs for logging purposes
@@ -105,8 +103,6 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    torch.backends.cudnn.enabled = True
-    utils.init_distributed_mode(args)
     print(args)
 
     device = torch.device(args.device)
@@ -119,13 +115,18 @@ def main(args):
     else:
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
-
+    if 'voc' in args.dataset:
+        init_num = 500
+        budget_num = 500
+    else:
+        init_num = 5000
+        budget_num = 1000
     print("Creating data loaders")
     num_images = len(dataset)
     indices = list(range(num_images))
     random.shuffle(indices)
-    labeled_set = indices[:int(num_images * 0.1)]
-    unlabeled_set = indices[int(num_images * 0.1):]
+    labeled_set = indices[:init_num]
+    unlabeled_set = list(set(indices) - set(labeled_set))
     train_sampler = SubsetRandomSampler(labeled_set)
     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=test_sampler, num_workers=args.workers,
@@ -146,8 +147,109 @@ def main(args):
                                                   collate_fn=utils.collate_fn)
 
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=600, max_size=1000)
+        if 'voc' in args.dataset:
+            task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=600, max_size=1000)
+        else:
+            task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
+
+        if not args.init and cycle == 0 and args.skip:
+            checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
+                                    map_location='cpu')
+            task_model.load_state_dict(checkpoint['model'])
+            # if 'coco' in args.dataset:
+            #     coco_evaluate(task_model, data_loader_test)
+            # elif 'voc' in args.dataset:
+            #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            print("Getting stability")
+            random.shuffle(unlabeled_set)
+            if 'coco' in args.dataset:
+                subset = unlabeled_set[:10000]
+            else:
+                subset = unlabeled_set
+            unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                          num_workers=args.workers,
+                                          # more convenient if we maintain the order of subset
+                                          pin_memory=True, collate_fn=utils.collate_fn)
+            print("Getting detections from unlabeled set")
+            allScore, allBox, allY, al_idx = get_uncertainty(task_model, unlabeled_loader)
+            al_idx = [subset[i] for i in al_idx]
+            unlabeled_set = list(set(unlabeled_set) - set(al_idx))
+            cls_sum = 0
+            cls_loss_sum = np.zeros((num_classes - 1,))
+            print(
+                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
+            if len(al_idx) >= budget_num:
+                al_idx = al_idx[:budget_num]
+                labeled_set += al_idx
+                unlabeled_set = list(set(unlabeled_set) - set(al_idx))
+                print(len(set(labeled_set)))
+                print(
+                    "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
+                                                                                          len(al_idx)))
+                # Create a new dataloader for the updated labeled dataset
+                train_sampler = SubsetRandomSampler(labeled_set)
+                clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
+                gamma = min(gamma + 0.05, 1)
+                continue
+            print("Image cross validation")
+            for i in range(len(unlabeled_set)):
+                if len(al_idx) >= budget_num:
+                    break
+                cls_sum += len(allBox[i])
+                for j, box in enumerate(allBox[i]):
+                    if len(al_idx) >= budget_num:
+                        break
+                    score = allScore[i][j]
+                    label = torch.tensor(allY[i][j]).cuda()
+                    loss = -((1 + label.cpu().numpy()) / 2 * np.log(score.cpu().numpy()) + (
+                            1 - label.cpu().numpy()) / 2 * np.log(1 - score.cpu().numpy() + 1e-30))
+                    cls_loss_sum += loss
+                    v, v_val = judge_uv(loss, gamma, clslambda)
+                    if v:
+                        # print(label)
+                        if torch.sum(label == 1) == 1 and torch.where(label == 1)[0] != 0:
+                            # add Imgae Cross Validation
+                            pre_cls = torch.where(label == 1)[0]
+                            pre_box = box
+                            curr_ind = [unlabeled_set[i]]
+                            curr_sampler = SubsetSequentialSampler(curr_ind)
+                            curr_loader = DataLoader(dataset, batch_size=1, sampler=curr_sampler,
+                                                     num_workers=args.workers, pin_memory=True,
+                                                     collate_fn=utils.collate_fn)
+                            labeled_sampler = SubsetRandomSampler(labeled_set)
+                            labeled_loader = DataLoader(dataset, batch_size=1, sampler=labeled_sampler,
+                                                        num_workers=args.workers, pin_memory=True,
+                                                        collate_fn=utils.collate_fn)
+                            cross_validate, _ = image_cross_validation(
+                                task_model, curr_loader, labeled_loader, pre_box, pre_cls)
+                            if not cross_validate:
+                                al_idx.append(unlabeled_set[i])
+                                break
+                        else:
+                            continue
+                    else:
+                        al_idx.append(unlabeled_set[i])
+                        break
+            # Update the labeled dataset and the unlabeled dataset, respectively
+            print(
+                "Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
+                                                                                       len(set(al_idx))))
+            if len(al_idx) > budget_num:
+                al_idx = al_idx[:budget_num]
+            if len(al_idx) < budget_num:
+                al_idx += list(set(unlabeled_set) - set(al_idx))[:budget_num - len(al_idx)]
+            labeled_set += al_idx
+            print(len(set(labeled_set)))
+            unlabeled_set = list(set(unlabeled_set) - set(al_idx))
+            print(
+                "Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
+                                                                                       len(set(al_idx))))
+            # Create a new dataloader for the updated labeled dataset
+            train_sampler = SubsetRandomSampler(labeled_set)
+            clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
+            gamma = min(gamma + 0.05, 1)
+            continue
 
         params = [p for p in task_model.parameters() if p.requires_grad]
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -169,24 +271,37 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test)
-        unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(unlabeled_set),
+                    task_model.ssm_mode(False)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+        # if not args.skip and cycle == 0:
+        #     utils.save_on_master({
+        #         'model': task_model.state_dict(), 'args': args},
+        #         os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
+        random.shuffle(unlabeled_set)
+        if 'coco' in args.dataset:
+            subset = unlabeled_set[:10000]
+        else:
+            subset = unlabeled_set
+        unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                       num_workers=args.workers,
                                       # more convenient if we maintain the order of subset
                                       pin_memory=True, collate_fn=utils.collate_fn)
         print("Getting detections from unlabeled set")
         allScore, allBox, allY, al_idx = get_uncertainty(task_model, unlabeled_loader)
-        al_idx = [unlabeled_set[i] for i in al_idx]
+        al_idx = [subset[i] for i in al_idx]
         unlabeled_set = list(set(unlabeled_set) - set(al_idx))
         cls_sum = 0
         cls_loss_sum = np.zeros((num_classes - 1,))
-        print("First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
-        if len(al_idx) >= 0.05 * num_images:
-            al_idx = al_idx[:int(0.05 * num_images)]
+        print(
+            "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(set(al_idx))))
+        if len(al_idx) >= budget_num:
+            al_idx = al_idx[:budget_num]
             labeled_set += al_idx
+            print(len(set(labeled_set)))
             unlabeled_set = list(set(unlabeled_set) - set(al_idx))
             print(
-                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
+                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
+                                                                                      len(set(al_idx))))
             # Create a new dataloader for the updated labeled dataset
             train_sampler = SubsetRandomSampler(labeled_set)
             clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
@@ -194,11 +309,11 @@ def main(args):
             continue
         print("Image cross validation")
         for i in range(len(unlabeled_set)):
-            if len(al_idx) >= int(0.05 * num_images):
+            if len(al_idx) >= budget_num:
                 break
             cls_sum += len(allBox[i])
             for j, box in enumerate(allBox[i]):
-                if len(al_idx) >= int(0.05 * num_images):
+                if len(al_idx) >= budget_num:
                     break
                 score = allScore[i][j]
                 label = torch.tensor(allY[i][j]).cuda()
@@ -219,7 +334,7 @@ def main(args):
                         labeled_loader = DataLoader(dataset, batch_size=1, sampler=labeled_sampler,
                                                     num_workers=args.workers, pin_memory=True,
                                                     collate_fn=utils.collate_fn)
-                        cross_validate, avg_score = image_cross_validation(
+                        cross_validate, _ = image_cross_validation(
                             task_model, curr_loader, labeled_loader, pre_box, pre_cls)
                         if not cross_validate:
                             al_idx.append(unlabeled_set[i])
@@ -229,11 +344,12 @@ def main(args):
                     break
         # Update the labeled dataset and the unlabeled dataset, respectively
         print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
-        if len(al_idx) > int(0.05 * num_images):
-            al_idx = al_idx[:int(0.05 * num_images)]
-        if len(al_idx) < (0.05 * num_images):
-            al_idx += list(set(unlabeled_set) - set(al_idx))[:int(0.05 * num_images) - len(al_idx)]
+        if len(al_idx) > budget_num:
+            al_idx = al_idx[:budget_num]
+        if len(al_idx) < budget_num:
+            al_idx += list(set(unlabeled_set) - set(al_idx))[:budget_num - len(al_idx)]
         labeled_set += al_idx
+        print(len(set(labeled_set)))
         unlabeled_set = list(set(unlabeled_set) - set(al_idx))
         print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
         # Create a new dataloader for the updated labeled dataset
@@ -252,15 +368,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
-    parser.add_argument('--dataset', default='voc', help='dataset')
+    parser.add_argument('-p', '--data-path', default='/data/yuweiping/coco/', help='dataset path')
+    parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
-    parser.add_argument('-b', '--batch-size', default=2, type=int,
+    parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
-    parser.add_argument('--task-epochs', default=20, type=int, metavar='N',
+    parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
+                        help='path to save checkpoint of first cycle')
+    parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('-e', '--total-epochs', default=20, type=int, metavar='N',
+    parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--cycles', default=7, type=int, metavar='N',
                         help='number of cycles epochs to run')
@@ -282,21 +400,20 @@ if __name__ == "__main__":
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('-rp', '--results-path', default='results',
+                        help='path to save detection results (only for voc)')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
-    parser.add_argument(
-        "--test-only",
-        dest="test_only",
-        help="Only test the model",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--pretrained",
-        dest="pretrained",
-        help="Use pre-trained models from the modelzoo",
-        action="store_true",
-    )
-
+    parser.add_argument('-i', "--init", dest="init", help="if use init sample", action="store_true")
+    parser.add_argument("--test-only", dest="test_only", help="Only test the model", action="store_true")
+    parser.add_argument('-s', "--skip", dest="skip", help="Skip first cycle and use pretrained model to save time",
+                        action="store_true")
+    parser.add_argument('-m', "--mutual", dest="mutual", help="use mutual information",
+                        action="store_true")
+    parser.add_argument('-mr', default=1.2, type=float, help='mutual range')
+    parser.add_argument('-bp', default=1.15, type=float, help='base point')
+    parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
+                        action="store_true")
     # distributed training parameters
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')

@@ -216,7 +216,7 @@ class AdversarySampler:
         return querry_pool_indices
 
 
-def sample_for_labeling(vae, discriminator, unlabeled_dataloader, num_imgs):
-    sampler = AdversarySampler(int(0.05 * num_imgs))
+def sample_for_labeling(vae, discriminator, unlabeled_dataloader, budget):
+    sampler = AdversarySampler(budget)
     querry_indices = sampler.sample(vae, discriminator, unlabeled_dataloader)
     return querry_indices

@@ -127,8 +127,6 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    # torch.backends.cudnn.enabled = True
-    utils.init_distributed_mode(args)
     print(args)
 
     device = torch.device(args.device)

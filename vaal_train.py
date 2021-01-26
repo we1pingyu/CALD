@@ -148,10 +148,6 @@ def main(args):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    # torch.backends.cudnn.enabled = True
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
-    utils.init_distributed_mode(args)
     print(args)
 
     device = torch.device(args.device)
@@ -164,13 +160,18 @@ def main(args):
     else:
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
-
+    if 'voc' in args.dataset:
+        init_num = 500
+        budget_num = 500
+    else:
+        init_num = 5000
+        budget_num = 1000
     print("Creating data loaders")
     num_images = len(dataset)
     indices = list(range(num_images))
     random.shuffle(indices)
-    labeled_set = indices[:int(num_images * 0.1)]
-    unlabeled_set = indices[int(num_images * 0.1):]
+    labeled_set = indices[:init_num]
+    unlabeled_set = list(set(indices) - set(labeled_set))
     train_sampler = SubsetRandomSampler(labeled_set)
     unlabeled_sampler = SubsetRandomSampler(unlabeled_set)
     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
@@ -190,7 +191,10 @@ def main(args):
                                                            num_workers=args.workers,
                                                            collate_fn=utils.collate_fn)
         print("Creating model")
-        task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+        if 'voc' in args.dataset:
+            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+        else:
+            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]
@@ -238,7 +242,7 @@ def main(args):
         # Update the labeled dataset and the unlabeled dataset, respectively
         unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(unlabeled_set),
                                       num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-        tobe_labeled_inds = sample_for_labeling(vae, discriminator, unlabeled_loader, num_images)
+        tobe_labeled_inds = sample_for_labeling(vae, discriminator, unlabeled_loader, budget_num)
         tobe_labeled_set = [unlabeled_set[i] for i in tobe_labeled_inds]
         labeled_set += tobe_labeled_set
         unlabeled_set = list(set(unlabeled_set) - set(tobe_labeled_set))
@@ -256,12 +260,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__)
 
-    parser.add_argument('--data-path', default='/data/yuweiping/voc/', help='dataset')
+    parser.add_argument('-p', '--data-path', default='/data/yuweiping/coco/', help='dataset path')
     parser.add_argument('--dataset', default='voc2007', help='dataset')
     parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
-    parser.add_argument('-b', '--batch-size', default=2, type=int,
+    parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
+    parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
+                        help='path to save checkpoint of first cycle')
     parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
@@ -273,6 +279,8 @@ if __name__ == "__main__":
     parser.add_argument('--lr', default=0.0025, type=float,
                         help='initial learning rate, 0.02 is the default value for training '
                              'on 8 gpus and 2 images_per_gpu')
+    parser.add_argument('--ll-weight', default=0.5, type=float,
+                        help='ll loss weight')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                         help='momentum')
     parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
@@ -284,21 +292,20 @@ if __name__ == "__main__":
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('-rp', '--results-path', default='results',
+                        help='path to save detection results (only for voc)')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
-    parser.add_argument(
-        "--test-only",
-        dest="test_only",
-        help="Only test the model",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--pretrained",
-        dest="pretrained",
-        help="Use pre-trained models from the modelzoo",
-        action="store_true",
-    )
-
+    parser.add_argument('-i', "--init", dest="init", help="if use init sample", action="store_true")
+    parser.add_argument("--test-only", dest="test_only", help="Only test the model", action="store_true")
+    parser.add_argument('-s', "--skip", dest="skip", help="Skip first cycle and use pretrained model to save time",
+                        action="store_true")
+    parser.add_argument('-m', "--mutual", dest="mutual", help="use mutual information",
+                        action="store_true")
+    parser.add_argument('-mr', default=1.2, type=float, help='mutual range')
+    parser.add_argument('-bp', default=1.15, type=float, help='base point')
+    parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
+                        action="store_true")
     # distributed training parameters
     parser.add_argument('--world-size', default=1, type=int,
                         help='number of distributed processes')

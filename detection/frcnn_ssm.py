@@ -57,7 +57,7 @@ class RoIHeads(_RoIHeads):
         all_boxes = torch.empty([0, 4]).cuda()
         all_scores = torch.tensor([]).cuda()
         all_labels = []
-        CONF_THRESH = 0.5  # bigger leads more active learning samples
+        CONF_THRESH = 0.0  # bigger leads more active learning samples
         for boxes, scores, image_shape in zip(pred_boxes, pred_scores, image_shapes):
             boxes = box_ops.clip_boxes_to_image(boxes, image_shape)
             # create labels for each prediction
@@ -69,6 +69,7 @@ class RoIHeads(_RoIHeads):
             scores = scores[:, 1:]
             labels = labels[:, 1:]
             if torch.max(scores) < CONF_THRESH:
+                # print(scores)
                 al_idx = 1
                 continue
             for cls_ind in range(num_classes - 1):
@@ -83,7 +84,8 @@ class RoIHeads(_RoIHeads):
                 # remove low scoring boxes
 
                 # non-maximum suppression, independently done per class
-                keep = box_ops.batched_nms(cls_boxes, cls_scores, cls_labels, self.nms_thresh)
+                # self.nms_thresh = 0.3
+                keep = box_ops.batched_nms(cls_boxes, cls_scores, cls_labels, 0.3)
                 # keep only topk scoring predictions
                 keep = keep[:self.detections_per_img]
                 cls_boxes, cls_scores, cls_labels = cls_boxes[keep], cls_scores[keep], cls_labels[keep]
@@ -92,7 +94,6 @@ class RoIHeads(_RoIHeads):
                     continue
                 for j in inds:
                     # boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
-
                     all_boxes = torch.cat((all_boxes, cls_boxes[j].unsqueeze(0)), 0)
                     k = keep[j]
                     all_scores = torch.cat((all_scores, scores[k].unsqueeze(0)), 0)

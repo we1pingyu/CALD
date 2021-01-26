@@ -14,7 +14,7 @@ def get_uncertainty(task_model, unlabeled_loader):
     allY = []
     al_idx = []
     with torch.no_grad():
-        for i, (images, labels) in enumerate(unlabeled_loader):
+        for i, (images, _) in enumerate(unlabeled_loader):
             images = list(img.cuda() for img in images)
             dets = task_model(images)
             # only support batch_size=1 when testing
@@ -22,8 +22,10 @@ def get_uncertainty(task_model, unlabeled_loader):
             scores = dets[0]['scores']
             labels = dets[0]['labels']
             al = dets[0]['al']
+            # print(scores)
             if al == 1:
                 al_idx.append(i)
+                # print(scores)
                 continue
             allBox.append(boxes)
             allScore.append(scores)
@@ -104,7 +106,8 @@ def image_cross_validation(model, curr_loader, labeled_sampler, pre_box, pre_cls
                 break
         else:
             continue
-    if cross_validation > total_select / 2:
+    if cross_validation > total_select:
+        print(cross_validation)
         return True, avg_score / cross_validation
     else:
         return False, 0
