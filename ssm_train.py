@@ -49,6 +49,7 @@ from ll4al.data.sampler import SubsetSequentialSampler
 from ssm.ssm_helper import *
 
 import warnings
+from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
 
 warnings.filterwarnings("ignore")
 
@@ -110,7 +111,7 @@ def main(args):
     # Data loading code
     print("Loading data")
     if 'voc2007' in args.dataset:
-        dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+        dataset, num_classes = get_dataset(args.dataset, "trainval", get_transform(train=True), args.data_path)
         dataset_test, _ = get_dataset(args.dataset, "test", get_transform(train=False), args.data_path)
     else:
         dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
@@ -157,6 +158,13 @@ def main(args):
             checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
                                     map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
+            if args.test_only:
+                if 'coco' in args.dataset:
+                    coco_evaluate(task_model, data_loader_test)
+                elif 'voc' in args.dataset:
+                    # task_model.ssm_mode(False)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+                return
             # if 'coco' in args.dataset:
             #     coco_evaluate(task_model, data_loader_test)
             # elif 'voc' in args.dataset:
@@ -174,26 +182,27 @@ def main(args):
             print("Getting detections from unlabeled set")
             allScore, allBox, allY, al_idx = get_uncertainty(task_model, unlabeled_loader)
             al_idx = [subset[i] for i in al_idx]
-            unlabeled_set = list(set(unlabeled_set) - set(al_idx))
+            # al_idx = subset[:budget_num]
             cls_sum = 0
             cls_loss_sum = np.zeros((num_classes - 1,))
             print(
-                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
+                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset), len(al_idx)))
             if len(al_idx) >= budget_num:
                 al_idx = al_idx[:budget_num]
                 labeled_set += al_idx
-                unlabeled_set = list(set(unlabeled_set) - set(al_idx))
+                subset = list(set(subset) - set(al_idx))
                 print(len(set(labeled_set)))
                 print(
-                    "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
-                                                                                          len(al_idx)))
+                    "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset), len(al_idx)))
                 # Create a new dataloader for the updated labeled dataset
                 train_sampler = SubsetRandomSampler(labeled_set)
                 clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
                 gamma = min(gamma + 0.05, 1)
+                unlabeled_set = list(set(unlabeled_set) - set(al_idx))
                 continue
+            subset = list(set(subset) - set(al_idx))
             print("Image cross validation")
-            for i in range(len(unlabeled_set)):
+            for i in range(len(subset)):
                 if len(al_idx) >= budget_num:
                     break
                 cls_sum += len(allBox[i])
@@ -212,7 +221,7 @@ def main(args):
                             # add Imgae Cross Validation
                             pre_cls = torch.where(label == 1)[0]
                             pre_box = box
-                            curr_ind = [unlabeled_set[i]]
+                            curr_ind = [subset[i]]
                             curr_sampler = SubsetSequentialSampler(curr_ind)
                             curr_loader = DataLoader(dataset, batch_size=1, sampler=curr_sampler,
                                                      num_workers=args.workers, pin_memory=True,
@@ -224,27 +233,26 @@ def main(args):
                             cross_validate, _ = image_cross_validation(
                                 task_model, curr_loader, labeled_loader, pre_box, pre_cls)
                             if not cross_validate:
-                                al_idx.append(unlabeled_set[i])
+                                al_idx.append(subset[i])
                                 break
                         else:
                             continue
                     else:
-                        al_idx.append(unlabeled_set[i])
+                        al_idx.append(subset[i])
                         break
             # Update the labeled dataset and the unlabeled dataset, respectively
             print(
-                "Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
+                "Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset),
                                                                                        len(set(al_idx))))
+            subset = list(set(subset) - set(al_idx))
             if len(al_idx) > budget_num:
                 al_idx = al_idx[:budget_num]
             if len(al_idx) < budget_num:
-                al_idx += list(set(unlabeled_set) - set(al_idx))[:budget_num - len(al_idx)]
+                al_idx += list(set(subset) - set(al_idx))[:budget_num - len(al_idx)]
             labeled_set += al_idx
-            print(len(set(labeled_set)))
             unlabeled_set = list(set(unlabeled_set) - set(al_idx))
             print(
-                "Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
-                                                                                       len(set(al_idx))))
+                "Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset), len(set(al_idx))))
             # Create a new dataloader for the updated labeled dataset
             train_sampler = SubsetRandomSampler(labeled_set)
             clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
@@ -255,12 +263,7 @@ def main(args):
         task_optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
         task_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(task_optimizer, milestones=args.lr_steps,
                                                                  gamma=args.lr_gamma)
-        if args.test_only:
-            if 'coco' in args.dataset:
-                coco_evaluate(task_model, data_loader_test)
-            elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test)
-            return
+
         print("Start training")
         start_time = time.time()
         for epoch in range(args.start_epoch, args.total_epochs):
@@ -289,26 +292,26 @@ def main(args):
         print("Getting detections from unlabeled set")
         allScore, allBox, allY, al_idx = get_uncertainty(task_model, unlabeled_loader)
         al_idx = [subset[i] for i in al_idx]
-        unlabeled_set = list(set(unlabeled_set) - set(al_idx))
         cls_sum = 0
         cls_loss_sum = np.zeros((num_classes - 1,))
         print(
-            "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(set(al_idx))))
+            "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset), len(set(al_idx))))
         if len(al_idx) >= budget_num:
             al_idx = al_idx[:budget_num]
             labeled_set += al_idx
             print(len(set(labeled_set)))
-            unlabeled_set = list(set(unlabeled_set) - set(al_idx))
+            subset = list(set(subset) - set(al_idx))
             print(
-                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set),
-                                                                                      len(set(al_idx))))
+                "First stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset), len(set(al_idx))))
             # Create a new dataloader for the updated labeled dataset
             train_sampler = SubsetRandomSampler(labeled_set)
             clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))
             gamma = min(gamma + 0.05, 1)
+            unlabeled_set = list(set(unlabeled_set) - set(al_idx))
             continue
+        subset = list(set(subset) - set(al_idx))
         print("Image cross validation")
-        for i in range(len(unlabeled_set)):
+        for i in range(len(subset)):
             if len(al_idx) >= budget_num:
                 break
             cls_sum += len(allBox[i])
@@ -326,7 +329,7 @@ def main(args):
                         # add Imgae Cross Validation
                         pre_cls = torch.where(label == 1)[0]
                         pre_box = box
-                        curr_ind = [unlabeled_set[i]]
+                        curr_ind = [subset[i]]
                         curr_sampler = SubsetSequentialSampler(curr_ind)
                         curr_loader = DataLoader(dataset, batch_size=1, sampler=curr_sampler,
                                                  num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
@@ -337,21 +340,21 @@ def main(args):
                         cross_validate, _ = image_cross_validation(
                             task_model, curr_loader, labeled_loader, pre_box, pre_cls)
                         if not cross_validate:
-                            al_idx.append(unlabeled_set[i])
+                            al_idx.append(subset[i])
                             break
                 else:
-                    al_idx.append(unlabeled_set[i])
+                    al_idx.append(subset[i])
                     break
         # Update the labeled dataset and the unlabeled dataset, respectively
-        print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
+        print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset), len(set(al_idx))))
+        subset = list(set(subset) - set(al_idx))
         if len(al_idx) > budget_num:
             al_idx = al_idx[:budget_num]
         if len(al_idx) < budget_num:
-            al_idx += list(set(unlabeled_set) - set(al_idx))[:budget_num - len(al_idx)]
+            al_idx += list(set(subset) - set(al_idx))[:budget_num - len(al_idx)]
         labeled_set += al_idx
-        print(len(set(labeled_set)))
         unlabeled_set = list(set(unlabeled_set) - set(al_idx))
-        print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(unlabeled_set), len(al_idx)))
+        print("Second stage results: unlabeled set: {}, tobe labeled set: {}".format(len(subset), len(set(al_idx))))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)
         clslambda = 0.9 * clslambda - 0.1 * np.log(softmax(cls_loss_sum / (cls_sum + 1e-30)))

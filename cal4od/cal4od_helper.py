@@ -243,22 +243,93 @@ def intersect(boxes1, boxes2):
     return inter[:, :, 0] * inter[:, :, 1]  # (n1, n2)
 
 
-def draw_PIL_image(image, boxes, labels, name):
-    '''
-        Draw PIL image
-        image: A PIL image
-        labels: A tensor of dimensions (#objects,)
-        boxes: A tensor of dimensions (#objects, 4)
-    '''
+# def draw_PIL_image(image, boxes, labels, name, no=None):
+#     '''
+#         Draw PIL image
+#         image: A PIL image
+#         labels: A tensor of dimensions (#objects,)
+#         boxes: A tensor of dimensions (#objects, 4)
+#     '''
+#     if type(image) != PIL.Image.Image:
+#         image = F.to_pil_image(image)
+#     new_image = image.copy()
+#     labels = labels.tolist()
+#     draw = ImageDraw.Draw(new_image)
+#     boxes = boxes.tolist()
+#     # print(no)
+#     if no is not None:
+#         for n in no:
+#             draw.rectangle(xy=boxes[n], outline='red', width=2)
+#     else:
+#         for i in range(len(boxes)):
+#             draw.rectangle(xy=boxes[i])  # , outline=label_color_map[rev_label_map[labels[i]]])
+#     new_image.save('vis/{}.jpg'.format(name))
+
+import matplotlib.pyplot as plt
+
+
+def draw_PIL_image(image, boxes, labels, scores, name, no=None, color='greenyellow'):
     if type(image) != PIL.Image.Image:
         image = F.to_pil_image(image)
-    new_image = image.copy()
-    labels = labels.tolist()
-    draw = ImageDraw.Draw(new_image)
-    boxes = boxes.tolist()
-    for i in range(len(boxes)):
-        draw.rectangle(xy=boxes[i])  # , outline=label_color_map[rev_label_map[labels[i]]])
-    new_image.save('vis/{}.jpg'.format(name))
+    plt.imshow(image)
+    plt.axis('off')
+    plt.gca().set_axis_off()
+    plt.subplots_adjust(top=1, bottom=0, right=1, left=0,
+                        hspace=0, wspace=0)
+    plt.margins(0, 0)
+    plt.gca().xaxis.set_major_locator(plt.NullLocator())
+    plt.gca().yaxis.set_major_locator(plt.NullLocator())
+    i = 0
+    if no is not None:
+        for n in no:
+            if i >= 1:
+                color = 'greenyellow'
+            else:
+                color = 'red'
+            i += 1
+            x, y = boxes[n][0], boxes[n][1]
+            w, h = boxes[n][2] - boxes[n][0], boxes[n][3] - boxes[n][1]
+            plt.gca().add_patch(plt.Rectangle((x, y), w, h, fill=False, edgecolor=color, linewidth=2.5))
+            plt.text(x, y, '{}={}'.format(voc_labels[labels[n]], scores[n]), color='color', verticalalignment='bottom',
+                     fontsize=4)
+    plt.savefig('vis/{}.jpg'.format(name), dpi=128, bbox_inches='tight', pad_inches=0)
+    # plt.show()
+    plt.cla()
+
+
+def draw_PIL_image_2(image, ref_boxes, boxes, ref_labels, labels, scores, pm, name, no=None, color='greenyellow'):
+    if type(image) != PIL.Image.Image:
+        image = F.to_pil_image(image)
+    plt.imshow(image)
+    plt.axis('off')
+    plt.gca().set_axis_off()
+    plt.subplots_adjust(top=1, bottom=0, right=1, left=0,
+                        hspace=0, wspace=0)
+    plt.margins(0, 0)
+    plt.gca().xaxis.set_major_locator(plt.NullLocator())
+    plt.gca().yaxis.set_major_locator(plt.NullLocator())
+    i = 0
+    if no is not None:
+        for n in no:
+            if i < 1:
+                color = 'greenyellow'
+                x, y = ref_boxes[n][0], ref_boxes[n][1]
+                w, h = ref_boxes[n][2] - ref_boxes[n][0], ref_boxes[n][3] - ref_boxes[n][1]
+                plt.text(x, y, '{}={}'.format(voc_labels[ref_labels[n] - 1], round(scores[n].item(), 1)), color=color,
+                         verticalalignment='bottom',
+                         fontsize=16)
+            else:
+                color = 'red'
+                x, y = boxes[n][0], boxes[n][1]
+                w, h = boxes[n][2] - boxes[n][0], boxes[n][3] - boxes[n][1]
+                plt.text(x, y + h, '{}={}'.format(voc_labels[labels[n] - 1], round(pm[n].item(), 1)), color=color,
+                         verticalalignment='bottom',
+                         fontsize=16)
+            i += 1
+            plt.gca().add_patch(plt.Rectangle((x, y), w, h, fill=False, edgecolor=color, linewidth=2.5))
+    plt.savefig('vis/{}.jpg'.format(name), dpi=128, bbox_inches='tight', pad_inches=0)
+    # plt.show()
+    plt.cla()
 
 
 voc_labels = ('aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car',

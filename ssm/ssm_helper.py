@@ -106,8 +106,7 @@ def image_cross_validation(model, curr_loader, labeled_sampler, pre_box, pre_cls
                 break
         else:
             continue
-    if cross_validation > total_select:
-        print(cross_validation)
+    if cross_validation > total_select / 2:
         return True, avg_score / cross_validation
     else:
         return False, 0

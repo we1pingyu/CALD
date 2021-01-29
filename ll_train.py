@@ -197,7 +197,7 @@ def main(args):
         # Start active learning cycles training
         if args.test_only:
             if 'coco' in args.dataset:
-                coco_evaluate(task_model, data_loader_test)
+                coco_evaluate(task_model, data_loader_test, feature=True)
             elif 'voc' in args.dataset:
                 voc_evaluate(task_model, data_loader_test, args.dataset, True)
             return
@@ -211,11 +211,14 @@ def main(args):
             # evaluate after pre-set epoch
             if (epoch + 1) == args.task_epochs or (epoch + 1) == args.total_epochs:
                 if 'coco' in args.dataset:
-                    coco_evaluate(task_model, data_loader_test)
+                    coco_evaluate(task_model, data_loader_test, feature=True)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset, True)
         random.shuffle(unlabeled_set)
-        subset = unlabeled_set
+        if 'coco' in args.dataset:
+            subset = unlabeled_set[:10000]
+        else:
+            subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset, batch_size=args.batch_size,
                                       sampler=SubsetSequentialSampler(subset), num_workers=args.workers,
                                       # more convenient if we maintain the order of subset

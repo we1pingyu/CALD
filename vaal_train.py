@@ -240,10 +240,15 @@ def main(args):
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset)
         # Update the labeled dataset and the unlabeled dataset, respectively
-        unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(unlabeled_set),
+        random.shuffle(unlabeled_set)
+        if 'coco' in args.dataset:
+            subset = unlabeled_set[:10000]
+        else:
+            subset = unlabeled_set
+        unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                       num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         tobe_labeled_inds = sample_for_labeling(vae, discriminator, unlabeled_loader, budget_num)
-        tobe_labeled_set = [unlabeled_set[i] for i in tobe_labeled_inds]
+        tobe_labeled_set = [subset[i] for i in tobe_labeled_inds]
         labeled_set += tobe_labeled_set
         unlabeled_set = list(set(unlabeled_set) - set(tobe_labeled_set))
         # Create a new dataloader for the updated labeled dataset

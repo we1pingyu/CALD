@@ -103,8 +103,10 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
             aug_boxes = []
             for image in images:
                 output = task_model([F.to_tensor(image).cuda()])
-                ref_boxes, prob_max, ref_scores_cls, ref_labels = output[0]['boxes'], output[0][
-                    'prob_max'], output[0]['scores_cls'], output[0]['labels']
+                ref_boxes, prob_max, ref_scores_cls, ref_labels, ref_scores = output[0]['boxes'], output[0][
+                    'prob_max'], output[0]['scores_cls'], output[0]['labels'], output[0]['scores']
+                # print(torch.argmax(ref_scores))
+                # draw_PIL_image(image, ref_boxes, ref_labels, 'ori', no=torch.topk(ref_scores, 2)[1].data)
                 cls_corr = [0] * (num_cls - 1)
                 for p, l in zip(prob_max, ref_labels):
                     # if p.item() > 0.4:
@@ -120,6 +122,7 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                     flip_image, flip_boxes = HorizontalFlip(image, ref_boxes)
                     aug_images.append(flip_image.cuda())
                     aug_boxes.append(flip_boxes.cuda())
+                    # draw_PIL_image(flip_image, flip_boxes, ref_labels, '1_', no=torch.topk(ref_scores, 2)[1].data)
                 if 'multi_ga' in augs:
                     for i in range(1, 7):
                         ga_image = GaussianNoise(image, i * 8)
@@ -146,11 +149,12 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                         sp_image = SaltPepperNoise(image, i * 0.05)
                         aug_images.append(sp_image.cuda())
                         aug_boxes.append(ref_boxes)
-                        draw_PIL_image(sp_image, ref_boxes, ref_labels, i)
+                        # draw_PIL_image(sp_image, ref_boxes, ref_labels, i)
                 if 'cut_out' in augs:
                     cutout_image = cutout(image, ref_boxes, ref_labels, 2)
                     aug_images.append(cutout_image.cuda())
                     aug_boxes.append(ref_boxes)
+                    # draw_PIL_image(cutout_image, ref_boxes, ref_labels, '2_', no=torch.topk(ref_scores, 2)[1].data)
                 if 'multi_cut_out' in augs:
                     for i in range(1, 5):
                         cutout_image = cutout(image, ref_boxes, ref_labels, i)
@@ -167,17 +171,16 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                     resize_image, resize_boxes = resize(image, ref_boxes, 1.2)
                     aug_images.append(resize_image.cuda())
                     aug_boxes.append(resize_boxes)
-                    # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_4')
                 if 'smaller_resize' in augs:
                     resize_image, resize_boxes = resize(image, ref_boxes, 0.8)
                     aug_images.append(resize_image.cuda())
                     aug_boxes.append(resize_boxes)
-                    # draw_PIL_image(resize_image, resize_boxes, ref_labels, '_4')
+                    # draw_PIL_image(resize_image, resize_boxes, ref_labels, '3_', no=torch.topk(ref_scores, 2)[1].data)
                 if 'rotation' in augs:
                     rot_image, rot_boxes = rotate(image, ref_boxes, 5)
                     aug_images.append(rot_image.cuda())
                     aug_boxes.append(rot_boxes)
-                    # draw_PIL_image(rot_image, rot_boxes, ref_labels, 'rot')
+                    # draw_PIL_image(rot_image, rot_boxes, ref_labels, '4_', no=torch.topk(ref_scores, 2)[1].data)
                     # rot_image, rot_boxes = rotate(flip_image, flip_boxes, -10)
                     # aug_images.append(rot_image.cuda())
                     # aug_boxes.append(rot_boxes)
@@ -187,7 +190,7 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                     outputs.append(task_model([aug_image])[0])
                 consistency_aug = []
                 mean_aug = []
-
+                i = 1
                 for output, aug_box, aug_image in zip(outputs, aug_boxes, aug_images):
                     consistency_img = 1.0
                     mean_img = []
@@ -203,6 +206,8 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                         consistency_aug.append(0.0)
                         mean_aug.append(0.0)
                         continue
+                    j = 0
+                    no = []
                     for ab, ref_score_cls, ref_pm in zip(aug_box, ref_scores_cls, prob_max):
                         width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
                         height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
@@ -218,12 +223,30 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                         js = 0.5 * scipy.stats.entropy(p, m) + 0.5 * scipy.stats.entropy(q, m)
                         if js < 0:
                             js = 0
+                        # if 0.6 > torch.max(iou) > 0.4 and 0.4 < 0.5 * (1 - js) * (
+                        #         ref_pm + pm[torch.argmax(iou)]) < 0.6 and (ab[2] - ab[0]) > 200 and \
+                        #         torch.max(ref_score_cls) < 0.6 and pm[torch.argmax(iou)] < 0.6:
+                        #     # draw_PIL_image(image, boxes, ref_labels, i, no=[ab], color='greenyellow')
+                        #     no = [j, torch.argmax(iou).item()]
+                        #     draw_PIL_image_2(aug_image.cpu(), aug_box, boxes, ref_labels, labels, ref_scores, pm,
+                        #                      'bad', no=no, color='red')
+                        #     print(1 / 0)
+                        j += 1
                         consistency_img = min(consistency_img, torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)]) - args.bp).item())
                         mean_img.append(torch.abs(
                             torch.max(iou) + 0.5 * (1 - js) * (ref_pm + pm[torch.argmax(iou)])).item())
+                        # if j <= 1:
+                        #     no.append(torch.argmax(iou).item())
+                        #     j += 1
+                        # if j == 2:
+                        #     draw_PIL_image(aug_image.cpu(), boxes, ref_labels, i, no=no, color='red')
+                        #     i += 1
+                        #     break
                     consistency_aug.append(consistency_img)
                     mean_aug.append(np.mean(mean_img))
+                # if torch.min(torch.topk(ref_scores, 2)[0]) > 0.85 and image.size[0] > image.size[1]:
+                #     print(1 / 0)
                 consistency_all.append(np.mean(consistency_aug))
                 mean_all.append(mean_aug)
                 cls_corrs = np.mean(np.array(cls_corrs), axis=0)
@@ -385,10 +408,13 @@ def main(args):
             checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
                                     map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
-            # if 'coco' in args.dataset:
-            #     coco_evaluate(task_model, data_loader_test)
-            # elif 'voc' in args.dataset:
-            #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            if args.test_only:
+                if 'coco' in args.dataset:
+                    coco_evaluate(task_model, data_loader_test)
+                elif 'voc' in args.dataset:
+                    # task_model.ssm_mode(False)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+                return
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
