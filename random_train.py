@@ -42,6 +42,7 @@ from detection import utils
 from detection import transforms as T
 from detection.train import *
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
+from torchvision.models.detection.retinanet import retinanet_resnet50_fpn
 
 
 def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
@@ -132,13 +133,23 @@ def main(args):
 
         print("Creating model")
         if 'voc' in args.dataset:
-            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         else:
-            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
         if not args.init and cycle == 0 and args.skip:
-            checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
-                                    map_location='cpu')
+            if 'faster' in args.model:
+                checkpoint = torch.load(os.path.join(args.first_checkpoint_path,
+                                                     '{}_frcnn_1st.pth'.format(args.dataset)), map_location='cpu')
+            elif 'retina' in args.model:
+                checkpoint = torch.load(os.path.join(args.first_checkpoint_path,
+                                                     '{}_retinanet_1st.pth'.format(args.dataset)), map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
             # if 'coco' in args.dataset:
             #     coco_evaluate(task_model, data_loader_test)
@@ -176,9 +187,14 @@ def main(args):
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset)
         if not args.skip and cycle == 0:
-            utils.save_on_master({
-                'model': task_model.state_dict(), 'args': args},
-                os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
+            if 'faster' in args.model:
+                utils.save_on_master({
+                    'model': task_model.state_dict(), 'args': args},
+                    os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
+            elif 'retina' in args.model:
+                utils.save_on_master({
+                    'model': task_model.state_dict(), 'args': args},
+                    os.path.join(args.first_checkpoint_path, '{}_retinanet_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += unlabeled_set[:budget_num]

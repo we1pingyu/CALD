@@ -52,12 +52,13 @@ class RoIHeads(_RoIHeads):
             # create labels for each prediction
             labels = torch.arange(num_classes, device=device)
             labels = labels.view(1, -1).expand_as(scores)
-            scores_cls = scores.unsqueeze(1).expand(scores.shape[0], scores.shape[1], scores.shape[1])
+            scores_cls = scores.unsqueeze(1).expand(scores.shape[0], scores.shape[1] - 1, scores.shape[1])
             scores_cls = scores_cls.reshape(-1, scores.shape[1])
             # remove predictions with the background label
             boxes = boxes[:, 1:]
             scores = scores[:, 1:]
             labels = labels[:, 1:]
+
             props = props.unsqueeze(1).expand(props.shape[0], boxes.shape[1], props.shape[1])
             # batch everything, by making every class prediction be a separate instance
             prob_max = torch.max(scores, 1)[0]
