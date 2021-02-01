@@ -610,7 +610,7 @@ class FRCNN_Feature(FasterRCNN):
         losses = {}
         losses.update(detector_losses)
         losses.update(proposal_losses)
-
+        # print(losses)
         if torch.jit.is_scripting():
             if not self._has_warned:
                 warnings.warn("RCNN always returns a (Losses, Detections) tuple in scripting")

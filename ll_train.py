@@ -36,6 +36,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from detection.frcnn_ll import fasterrcnn_resnet50_fpn_feature
+from detection.retina_ll import retinanet_resnet50_fpn
 from detection.coco_utils import get_coco, get_coco_kp
 from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from detection.engine import coco_evaluate, voc_evaluate
@@ -74,23 +75,43 @@ def train_one_epoch(task_model, task_optimizer, ll_model, ll_optimizer, data_loa
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         features, task_loss_dict = task_model(images, targets)
-        _task_losses = sum(loss for loss in task_loss_dict.values())
-        task_loss_dict['loss_objectness'] = torch.mean(task_loss_dict['loss_objectness'])
-        task_loss_dict['loss_rpn_box_reg'] = torch.mean(task_loss_dict['loss_rpn_box_reg'])
-        task_loss_dict['loss_classifier'] = torch.mean(task_loss_dict['loss_classifier'])
-        task_loss_dict['loss_box_reg'] = torch.mean(task_loss_dict['loss_box_reg'])
-        task_losses = sum(loss for loss in task_loss_dict.values())
-        # reduce losses over all GPUs for logging purposes
-        task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
-        task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
-        task_loss_value = task_losses_reduced.item()
-        # if epoch > args.task_epochs:
-        # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
-        features['0'] = features['0'].detach()
-        features['1'] = features['1'].detach()
-        features['2'] = features['2'].detach()
-        features['3'] = features['3'].detach()
-        ll_pred = ll_model(features).cuda()
+        if 'faster' in args.model:
+            _task_losses = sum(loss for loss in task_loss_dict.values())
+            # print(_task_losses)
+            task_loss_dict['loss_objectness'] = torch.mean(task_loss_dict['loss_objectness'])
+            task_loss_dict['loss_rpn_box_reg'] = torch.mean(task_loss_dict['loss_rpn_box_reg'])
+            task_loss_dict['loss_classifier'] = torch.mean(task_loss_dict['loss_classifier'])
+            task_loss_dict['loss_box_reg'] = torch.mean(task_loss_dict['loss_box_reg'])
+            task_losses = sum(loss for loss in task_loss_dict.values())
+            # reduce losses over all GPUs for logging purposes
+            task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
+            task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
+            task_loss_value = task_losses_reduced.item()
+            # if epoch > args.task_epochs:
+            # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
+            features['0'] = features['0'].detach()
+            features['1'] = features['1'].detach()
+            features['2'] = features['2'].detach()
+            features['3'] = features['3'].detach()
+            ll_pred = ll_model(features).cuda()
+        elif 'retina' in args.model:
+            _task_losses = sum(torch.stack(loss[1]) for loss in task_loss_dict.values())
+            task_loss_dict['classification'] = task_loss_dict['classification'][0]
+            task_loss_dict['bbox_regression'] = task_loss_dict['bbox_regression'][0]
+            # for loss in task_loss_dict.values():
+            #     print(loss)
+            task_losses = sum(loss for loss in task_loss_dict.values())
+            task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
+            task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
+            task_loss_value = task_losses_reduced.item()
+            # if epoch > args.task_epochs:
+            # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
+            _features = dict()
+            _features['0'] = features[0].detach()
+            _features['1'] = features[1].detach()
+            _features['2'] = features[2].detach()
+            _features['3'] = features[3].detach()
+            ll_pred = ll_model(_features).cuda()
         ll_pred = ll_pred.view(ll_pred.size(0))
         ll_loss = args.ll_weight * LossPredLoss(ll_pred, _task_losses, margin=MARGIN)
         losses = task_losses + ll_loss
@@ -125,7 +146,15 @@ def get_uncertainty(task_model, ll_model, unlabeled_loader):
             images = list(img.cuda() for img in images)
             torch.cuda.synchronize()
             features, _ = task_model(images)
-            ll_pred = ll_model(features)  # pred_loss = criterion(scores, labels) # ground truth loss
+            if 'retina' in args.model:
+                _features = dict()
+                _features['0'] = features[0].detach()
+                _features['1'] = features[1].detach()
+                _features['2'] = features[2].detach()
+                _features['3'] = features[3].detach()
+                ll_pred = ll_model(_features)  # pred_loss = criterion(scores, labels) # ground truth loss
+            else:
+                ll_pred = ll_model(features)  # pred_loss = criterion(scores, labels) # ground truth loss
             ll_pred = ll_pred.view(ll_pred.size(0))
             uncertainty = torch.cat((uncertainty, ll_pred), 0)
 
@@ -179,9 +208,15 @@ def main(args):
 
         print("Creating model")
         if 'voc' in args.dataset:
-            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         else:
-            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]

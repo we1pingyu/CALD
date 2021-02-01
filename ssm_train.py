@@ -149,14 +149,24 @@ def main(args):
 
         print("Creating model")
         if 'voc' in args.dataset:
-            task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=600, max_size=1000)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=600, max_size=1000)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn_ssm(num_classes=num_classes, min_size=600, max_size=1000)
         else:
-            task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=800, max_size=1333)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn_ssm(num_classes=num_classes, min_size=800, max_size=1333)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn_ssm(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
 
         if not args.init and cycle == 0 and args.skip:
-            checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
-                                    map_location='cpu')
+            if 'faster' in args.model:
+                checkpoint = torch.load(os.path.join(args.first_checkpoint_path,
+                                                     '{}_frcnn_1st.pth'.format(args.dataset)), map_location='cpu')
+            elif 'retina' in args.model:
+                checkpoint = torch.load(os.path.join(args.first_checkpoint_path,
+                                                     '{}_retinanet_1st.pth'.format(args.dataset)), map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
             if args.test_only:
                 if 'coco' in args.dataset:
