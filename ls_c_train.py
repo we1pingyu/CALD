@@ -39,6 +39,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from detection.frcnn_la import fasterrcnn_resnet50_fpn_feature
+from detection.retinanet_cal import retinanet_resnet50_fpn_cal
 from detection.coco_utils import get_coco, get_coco_kp
 from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from detection.engine import coco_evaluate, voc_evaluate
@@ -200,13 +201,23 @@ def main(args):
 
         print("Creating model")
         if 'voc' in args.dataset:
-            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=600, max_size=1000)
         else:
-            task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
         if not args.init and cycle == 0 and args.skip:
-            checkpoint = torch.load(os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)),
-                                    map_location='cpu')
+            if 'faster' in args.model:
+                checkpoint = torch.load(os.path.join(args.first_checkpoint_path,
+                                                     '{}_frcnn_1st.pth'.format(args.dataset)), map_location='cpu')
+            elif 'retina' in args.model:
+                checkpoint = torch.load(os.path.join(args.first_checkpoint_path,
+                                                     '{}_retinanet_1st.pth'.format(args.dataset)), map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
             # if 'coco' in args.dataset:
             #     coco_evaluate(task_model, data_loader_test)
@@ -215,7 +226,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:5000]
+                subset = unlabeled_set[:10000]
             else:
                 subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -259,7 +270,7 @@ def main(args):
         #         os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:5000]
+            subset = unlabeled_set[:10000]
         else:
             subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset_aug, batch_size=1,

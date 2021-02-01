@@ -62,7 +62,7 @@ class RoIHeads(_RoIHeads):
             props = props.unsqueeze(1).expand(props.shape[0], boxes.shape[1], props.shape[1])
             # batch everything, by making every class prediction be a separate instance
             prob_max = torch.max(scores, 1)[0]
-            prob_max = prob_max.unsqueeze(1).expand(prob_max.shape[0], boxes.shape[1])
+            prob_max = prob_max.unsqueeze(1).expand(prob_max.shape[0], scores.shape[1])
             boxes = boxes.reshape(-1, 4)
             scores = scores.flatten()
             prob_max = prob_max.flatten()

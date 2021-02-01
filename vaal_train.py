@@ -42,6 +42,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
+from torchvision.models.detection.retinanet import retinanet_resnet50_fpn
 from vaal.vaal_helper import *
 
 
@@ -192,9 +193,15 @@ def main(args):
                                                            collate_fn=utils.collate_fn)
         print("Creating model")
         if 'voc' in args.dataset:
-            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         else:
-            task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
+            if 'faster' in args.model:
+                task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
+            elif 'retina' in args.model:
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]

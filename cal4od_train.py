@@ -107,6 +107,10 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                 output = task_model([F.to_tensor(image).cuda()])
                 ref_boxes, prob_max, ref_scores_cls, ref_labels, ref_scores = output[0]['boxes'], output[0][
                     'prob_max'], output[0]['scores_cls'], output[0]['labels'], output[0]['scores']
+                if len(ref_scores) > 50:
+                    inds = torch.topk(ref_scores, 20)[1]
+                    ref_boxes, prob_max, ref_scores_cls, ref_labels, ref_scores = ref_boxes[inds], prob_max[
+                        inds], ref_scores_cls[inds], ref_labels[inds], ref_scores[inds]
                 # print(torch.argmax(ref_scores))
                 # draw_PIL_image(image, ref_boxes, ref_labels, 'ori', no=torch.topk(ref_scores, 2)[1].data)
                 cls_corr = [0] * (num_cls - 1)
@@ -193,6 +197,7 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                 consistency_aug = []
                 mean_aug = []
                 i = 1
+                # print(len(ref_boxes))
                 for output, aug_box, aug_image in zip(outputs, aug_boxes, aug_images):
                     consistency_img = 1.0
                     mean_img = []
@@ -251,8 +256,10 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                 #     print(1 / 0)
                 consistency_all.append(np.mean(consistency_aug))
                 mean_all.append(mean_aug)
+                # print(np.mean(consistency_aug))
                 cls_corrs = np.mean(np.array(cls_corrs), axis=0)
                 cls_all.append(cls_corrs)
+                # print(len(consistency_all))
     mean_aug = np.mean(mean_all, axis=0)
     print(mean_aug)
     return consistency_all, cls_all
@@ -385,6 +392,7 @@ def main(args):
         unlabeled_set = list(set(indices) - set(labeled_set))
     else:
         labeled_set = indices[:init_num]
+        print(labeled_set)
         unlabeled_set = list(set(indices) - set(labeled_set))
     train_sampler = SubsetRandomSampler(labeled_set)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=SequentialSampler(dataset_test),

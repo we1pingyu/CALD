@@ -406,21 +406,17 @@ class RetinaNet(nn.Module):
         device = class_logits.device
         num_classes = class_logits.shape[-1]
         scores = torch.sigmoid(class_logits)
-
-        scores_cls = scores.unsqueeze(1).expand(scores.shape[0], scores.shape[1], scores.shape[1])
-        scores_cls = scores_cls.reshape(-1, scores.shape[1])
-
-        prob_max = torch.max(scores, 2)[0]
-        prob_max = prob_max.unsqueeze(-1).expand(prob_max.shape[0], prob_max.shape[1], scores.shape[2])
         # create labels for each score
         labels = torch.arange(num_classes, device=device)
         labels = labels.view(1, -1).expand_as(scores)
-        print(labels.shape)
 
         detections = torch.jit.annotate(List[Dict[str, Tensor]], [])
-
         for index, (box_regression_per_image, scores_per_image, labels_per_image, anchors_per_image, image_shape) in \
                 enumerate(zip(box_regression, scores, labels, anchors, image_shapes)):
+
+            # scores_cls = scores_per_image.unsqueeze(1).expand(scores_per_image.shape[0], scores_per_image.shape[1],
+            #                                                   scores_per_image.shape[1])
+            # scores_cls = scores_cls.reshape(-1, scores_per_image.shape[1])
 
             boxes_per_image = self.box_coder.decode_single(box_regression_per_image, anchors_per_image)
             boxes_per_image = box_ops.clip_boxes_to_image(boxes_per_image, image_shape)
@@ -437,14 +433,23 @@ class RetinaNet(nn.Module):
             for class_index in range(num_classes):
                 # remove low scoring boxes
                 inds = torch.gt(scores_per_image[:, class_index], self.score_thresh)
-                boxes_per_class, scores_per_class, labels_per_class = \
-                    boxes_per_image[inds], scores_per_image[inds, class_index], labels_per_image[inds, class_index]
+                if not True in inds:
+                    prob_max = torch.Tensor([]).cuda()
+                    boxes_per_class, scores_per_class, scores_all_class, labels_per_class = \
+                        boxes_per_image[inds], scores_per_image[inds, class_index], scores_per_image[inds], \
+                        labels_per_image[inds, class_index]
+                else:
+                    boxes_per_class, scores_per_class, scores_all_class, prob_max, labels_per_class = \
+                        boxes_per_image[inds], scores_per_image[inds, class_index], scores_per_image[inds], \
+                        torch.max(scores_per_image[inds], dim=1)[0], labels_per_image[inds, class_index]
+                # print(boxes_per_class.shape, scores_all_class.shape)
                 other_outputs_per_class = [(k, v[inds]) for k, v in other_outputs_per_image]
 
                 # remove empty boxes
                 keep = box_ops.remove_small_boxes(boxes_per_class, min_size=1e-2)
-                boxes_per_class, scores_per_class, labels_per_class = \
-                    boxes_per_class[keep], scores_per_class[keep], labels_per_class[keep]
+                boxes_per_class, scores_per_class, scores_all_class, prob_max, labels_per_class, = \
+                    boxes_per_class[keep], scores_per_class[keep], scores_all_class[keep], \
+                    prob_max[keep], labels_per_class[keep]
                 other_outputs_per_class = [(k, v[keep]) for k, v in other_outputs_per_class]
 
                 # non-maximum suppression, independently done per class
@@ -452,12 +457,14 @@ class RetinaNet(nn.Module):
 
                 # keep only topk scoring predictions
                 keep = keep[:self.detections_per_img]
-                boxes_per_class, scores_per_class, labels_per_class = \
-                    boxes_per_class[keep], scores_per_class[keep], labels_per_class[keep]
+                boxes_per_class, scores_per_class, scores_all_class, prob_max, labels_per_class = \
+                    boxes_per_class[keep], scores_per_class[keep], scores_all_class[keep], \
+                    prob_max[keep], labels_per_class[keep]
                 other_outputs_per_class = [(k, v[keep]) for k, v in other_outputs_per_class]
-
                 image_boxes.append(boxes_per_class)
                 image_scores.append(scores_per_class)
+                all_scores_cls.append(scores_all_class)
+                all_prob_max.append(prob_max)
                 image_labels.append(labels_per_class)
 
                 for k, v in other_outputs_per_class:
@@ -469,6 +476,8 @@ class RetinaNet(nn.Module):
                 'boxes': torch.cat(image_boxes, dim=0),
                 'scores': torch.cat(image_scores, dim=0),
                 'labels': torch.cat(image_labels, dim=0),
+                'scores_cls': torch.cat(all_scores_cls, dim=0),
+                'prob_max': torch.cat(all_prob_max, dim=0)
             })
 
             for k, v in image_other_outputs.items():
