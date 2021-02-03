@@ -16,9 +16,13 @@ from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7
 from torchvision.ops import sigmoid_focal_loss
 from torchvision.ops import boxes as box_ops
+from torchvision.models import mobilenet
+from torchvision.ops import misc as misc_nn_ops
+from torchvision.models._utils import IntermediateLayerGetter
+from .mobilenetv3 import mobilenet_v3_large
 
 __all__ = [
-    "RetinaNet", "retinanet_resnet50_fpn",
+    "RetinaNet", "retinanet_resnet50_fpn", "retinanet_mobilenet"
 ]
 
 
@@ -557,7 +561,7 @@ model_urls = {
 
 
 def retinanet_resnet50_fpn(pretrained=False, progress=True,
-                           num_classes=91, pretrained_backbone=True, **kwargs):
+                           num_classes=91, pretrained_backbone=False, **kwargs):
     """
     Constructs a RetinaNet model with a ResNet-50-FPN backbone.
     The input to the model is expected to be a list of tensors, each of shape ``[C, H, W]``, one for each
@@ -598,3 +602,94 @@ def retinanet_resnet50_fpn(pretrained=False, progress=True,
                                               progress=progress)
         model.load_state_dict(state_dict)
     return model
+
+
+def retinanet_mobilenet(pretrained=False, progress=True, num_classes=91, pretrained_backbone=False,
+                        trainable_backbone_layers=None, min_size=320, max_size=640, **kwargs):
+    """
+    Constructs a RetinaNet model with a MobileNetV3-Large backbone. It works similarly
+    to RetinaNet with ResNet-50-FPN backbone. See `retinanet_resnet50_fpn` for more details.
+    Example::
+        >>> model = torchvision.models.detection.retinanet_mobilenet_v3_large(pretrained=True)
+        >>> model.eval()
+        >>> x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
+        >>> predictions = model(x)
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on COCO train2017
+        progress (bool): If True, displays a progress bar of the download to stderr
+        num_classes (int): number of output classes of the model (including the background)
+        pretrained_backbone (bool): If True, returns a model with backbone pre-trained on Imagenet
+        trainable_backbone_layers (int): number of trainable (not frozen) resnet layers starting from final block.
+            Valid values are between 0 and 6, with 6 meaning all backbone layers are trainable.
+        min_size (int): minimum size of the image to be rescaled before feeding it to the backbone
+        max_size (int): maximum size of the image to be rescaled before feeding it to the backbone
+    """
+    # check default parameters and by default set it to 6 if possible
+    trainable_backbone_layers = _validate_trainable_layers(
+        pretrained or pretrained_backbone, trainable_backbone_layers, 6, 6)
+
+    if pretrained:
+        pretrained_backbone = False
+    backbone = mobilenet_backbone("retinanet_mobilenet_v3_large", pretrained_backbone,
+                                  trainable_layers=trainable_backbone_layers)
+
+    anchor_sizes = ((16, 32, 64, 128, 256,),)
+    aspect_ratios = ((0.5, 1.0, 2.0),)
+
+    model = RetinaNet(backbone, num_classes, anchor_generator=AnchorGenerator(anchor_sizes, aspect_ratios),
+                      min_size=min_size, max_size=max_size, **kwargs)
+    if pretrained:
+        state_dict = load_state_dict_from_url(model_urls['retinanet_mobilenet_v3_large_coco'], progress=progress)
+        model.load_state_dict(state_dict)
+    return model
+
+
+def _validate_trainable_layers(pretrained, trainable_backbone_layers, max_value, default_value):
+    # dont freeze any layers if pretrained model or backbone is not used
+    if not pretrained:
+        if trainable_backbone_layers is not None:
+            warnings.warn(
+                "Changing trainable_backbone_layers has not effect if "
+                "neither pretrained nor pretrained_backbone have been set to True, "
+                "falling back to trainable_backbone_layers={} so that all layers are trainable".format(max_value))
+        trainable_backbone_layers = max_value
+
+    # by default freeze first blocks
+    if trainable_backbone_layers is None:
+        trainable_backbone_layers = default_value
+    assert 0 <= trainable_backbone_layers <= max_value
+    return trainable_backbone_layers
+
+
+def mobilenet_backbone(
+        backbone_name,
+        pretrained,
+        norm_layer=misc_nn_ops.FrozenBatchNorm2d,
+        trainable_layers=2
+):
+    backbone = mobilenet_v3_large(pretrained=pretrained, norm_layer=norm_layer).features
+
+    # Gather the indeces of blocks which are strided. These are the locations of C1, ..., Cn-1 blocks.
+    # The first and last blocks are always included because they are the C0 (conv1) and Cn.
+    stage_indeces = [0] + [i for i, b in enumerate(backbone) if getattr(b, "is_strided", False)] + [len(backbone) - 1]
+    num_stages = len(stage_indeces)
+
+    # find the index of the layer from which we wont freeze
+    assert 0 <= trainable_layers <= num_stages
+    freeze_before = num_stages if trainable_layers == 0 else stage_indeces[num_stages - trainable_layers]
+
+    # freeze layers only if pretrained backbone is used
+    for b in backbone[:freeze_before]:
+        for parameter in b.parameters():
+            parameter.requires_grad_(False)
+
+    backbone_channels = backbone[-1].out_channels
+    out_channels = 256
+
+    m = nn.Sequential(
+        backbone,
+        # depthwise linear combination of channels to reduce their size
+        nn.Conv2d(backbone_channels, out_channels, 1),
+    )
+    m.out_channels = out_channels
+    return m

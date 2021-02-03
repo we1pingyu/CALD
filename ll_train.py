@@ -37,14 +37,13 @@ import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from detection.frcnn_ll import fasterrcnn_resnet50_fpn_feature
-from detection.retina_ll import retinanet_resnet50_fpn
+from detection.retina_ll import retinanet_mobilenet
 from detection.coco_utils import get_coco, get_coco_kp
 from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from detection.engine import coco_evaluate, voc_evaluate
 from detection import utils
 from detection import transforms as T
 from detection.train import *
-from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
 
 import ll4al.models.resnet as resnet
 import ll4al.models.lossnet as lossnet
@@ -108,10 +107,10 @@ def train_one_epoch(task_model, task_optimizer, ll_model, ll_optimizer, data_loa
             if epoch >= args.task_epochs:
                 # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
                 _features = dict()
-                _features['0'] = features[0].detach()
-                _features['1'] = features[1].detach()
-                _features['2'] = features[2].detach()
-                _features['3'] = features[3].detach()
+                _features['0'] = features[0]
+                _features['1'] = features[0]
+                _features['2'] = features[0]
+                _features['3'] = features[0]
             else:
                 _features = dict()
                 _features['0'] = features[0]
@@ -218,12 +217,12 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
             elif 'retina' in args.model:
-                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
+                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=600, max_size=1000)
         else:
             if 'faster' in args.model:
-                task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
+                task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
             elif 'retina' in args.model:
-                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
+                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]
@@ -290,13 +289,13 @@ if __name__ == "__main__":
 
     parser.add_argument('-p', '--data-path', default='/data/yuweiping/coco/', help='dataset path')
     parser.add_argument('--dataset', default='voc2007', help='dataset')
-    parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
+    parser.add_argument('--model', default='faster_rcnn', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-b', '--batch-size', default=4, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
                         help='path to save checkpoint of first cycle')
-    parser.add_argument('--task_epochs', default=0, type=int, metavar='N',
+    parser.add_argument('-t', '--task_epochs', default=0, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
