@@ -43,6 +43,7 @@ from detection.engine import coco_evaluate, voc_evaluate
 from detection import utils
 from detection import transforms as T
 from detection.train import *
+from detection.retina_ssm import retinanet_resnet50_fpn_ssm
 
 from ll4al.data.sampler import SubsetSequentialSampler
 
@@ -119,6 +120,9 @@ def main(args):
     if 'voc' in args.dataset:
         init_num = 500
         budget_num = 500
+        if 'retina' in args.model:
+            init_num = 2000
+            budget_num = 500
     else:
         init_num = 5000
         budget_num = 1000

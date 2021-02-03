@@ -376,6 +376,9 @@ def main(args):
     if 'voc' in args.dataset:
         init_num = 500
         budget_num = 500
+        if 'retina' in args.model:
+            init_num = 2000
+            budget_num = 500
     else:
         init_num = 5000
         budget_num = 1000
@@ -417,7 +420,7 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=800, max_size=1333)
+                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
         if not args.init and cycle == 0 and args.skip:
             if 'faster' in args.model:

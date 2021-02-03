@@ -7,16 +7,15 @@ import torch.nn as nn
 from torch import Tensor
 from torch.jit.annotations import Dict, List, Tuple
 
-from ..utils import load_state_dict_from_url
+from torchvision.models.utils import load_state_dict_from_url
 
-from . import _utils as det_utils
-from .anchor_utils import AnchorGenerator
-from .transform import GeneralizedRCNNTransform
-from .backbone_utils import resnet_fpn_backbone
-from ...ops.feature_pyramid_network import LastLevelP6P7
-from ...ops import sigmoid_focal_loss
-from ...ops import boxes as box_ops
-
+from torchvision.models.detection import _utils as det_utils
+from torchvision.models.detection.anchor_utils import AnchorGenerator
+from torchvision.models.detection.transform import GeneralizedRCNNTransform
+from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
+from torchvision.ops.feature_pyramid_network import LastLevelP6P7
+from torchvision.ops import sigmoid_focal_loss
+from torchvision.ops import boxes as box_ops
 
 __all__ = [
     "RetinaNet", "retinanet_resnet50_fpn",
@@ -238,6 +237,19 @@ class RetinaNetRegressionHead(nn.Module):
         return torch.cat(all_bbox_regression, dim=1)
 
 
+def judge_y(score):
+    '''return :
+    y:np.array len(score)
+    '''
+    y = []
+    for s in score:
+        if s == 1 or torch.log(s) > torch.log(1 - s):
+            y.append(1)
+        else:
+            y.append(-1)
+    return y
+
+
 class RetinaNet(nn.Module):
     """
     Implements RetinaNet.
@@ -371,7 +383,7 @@ class RetinaNet(nn.Module):
         self.score_thresh = score_thresh
         self.nms_thresh = nms_thresh
         self.detections_per_img = detections_per_img
-
+        self.ssm = False
         # used only on torchscript mode
         self._has_warned = False
 
@@ -382,6 +394,9 @@ class RetinaNet(nn.Module):
             return losses
 
         return detections
+
+    def ssm_mode(self, ssm):
+        self.ssm = ssm
 
     def compute_loss(self, targets, head_outputs, anchors):
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor]) -> Dict[str, Tensor]
@@ -427,7 +442,6 @@ class RetinaNet(nn.Module):
             image_scores = []
             image_labels = []
             image_other_outputs = torch.jit.annotate(Dict[str, List[Tensor]], {})
-
             for class_index in range(num_classes):
                 # remove low scoring boxes
                 inds = torch.gt(scores_per_image[:, class_index], self.score_thresh)
@@ -470,6 +484,90 @@ class RetinaNet(nn.Module):
 
         return detections
 
+    def ssm_postprocess_detections(self, head_outputs, anchors, image_shapes):
+        # type: (Dict[str, Tensor], List[Tensor], List[Tuple[int, int]]) -> List[Dict[str, Tensor]]
+        # TODO: Merge this with roi_heads.RoIHeads.postprocess_detections ?
+
+        class_logits = head_outputs.pop('cls_logits')
+        box_regression = head_outputs.pop('bbox_regression')
+        other_outputs = head_outputs
+
+        device = class_logits.device
+        num_classes = class_logits.shape[-1]
+
+        scores = torch.sigmoid(class_logits)
+
+        # create labels for each score
+        labels = torch.arange(num_classes, device=device)
+        labels = labels.view(1, -1).expand_as(scores)
+
+        detections = torch.jit.annotate(List[Dict[str, Tensor]], [])
+        al_idx = 0
+        all_boxes = torch.empty([0, 4]).cuda()
+        all_scores = torch.tensor([]).cuda()
+        all_labels = []
+        CONF_THRESH = 0.5  # bigger leads more active learning samples
+        for index, (box_regression_per_image, scores_per_image, labels_per_image, anchors_per_image, image_shape) in \
+                enumerate(zip(box_regression, scores, labels, anchors, image_shapes)):
+
+            boxes_per_image = self.box_coder.decode_single(box_regression_per_image, anchors_per_image)
+            boxes_per_image = box_ops.clip_boxes_to_image(boxes_per_image, image_shape)
+
+            other_outputs_per_image = [(k, v[index]) for k, v in other_outputs.items()]
+
+            image_boxes = []
+            image_scores = []
+            image_labels = []
+            image_other_outputs = torch.jit.annotate(Dict[str, List[Tensor]], {})
+            if torch.max(scores_per_image) < CONF_THRESH:
+                # print(scores)
+                al_idx = 1
+                continue
+            for class_index in range(num_classes):
+                # remove low scoring boxes
+                inds = torch.gt(scores_per_image[:, class_index], self.score_thresh)
+                boxes_per_class, scores_per_class, labels_per_class = \
+                    boxes_per_image[inds], scores_per_image[inds, class_index], labels_per_image[inds, class_index]
+                other_outputs_per_class = [(k, v[inds]) for k, v in other_outputs_per_image]
+
+                # remove empty boxes
+                keep = box_ops.remove_small_boxes(boxes_per_class, min_size=1e-2)
+                boxes_per_class, scores_per_class, labels_per_class = \
+                    boxes_per_class[keep], scores_per_class[keep], labels_per_class[keep]
+                other_outputs_per_class = [(k, v[keep]) for k, v in other_outputs_per_class]
+
+                # non-maximum suppression, independently done per class
+                keep = box_ops.nms(boxes_per_class, scores_per_class, self.nms_thresh)
+
+                # keep only topk scoring predictions
+                keep = keep[:self.detections_per_img]
+                boxes_per_class, scores_per_class, labels_per_class = \
+                    boxes_per_class[keep], scores_per_class[keep], labels_per_class[keep]
+                other_outputs_per_class = [(k, v[keep]) for k, v in other_outputs_per_class]
+
+                image_boxes.append(boxes_per_class)
+                image_scores.append(scores_per_class)
+                image_labels.append(labels_per_class)
+
+                for k, v in other_outputs_per_class:
+                    if k not in image_other_outputs:
+                        image_other_outputs[k] = []
+                    image_other_outputs[k].append(v)
+                for i in len(boxes_per_class):
+                    all_boxes = torch.cat((all_boxes, boxes_per_class[i].unsqueeze(0)), 0)
+                    all_scores = torch.cat((all_scores, scores_per_class[i].unsqueeze(0)), 0)
+                    all_labels.append(judge_y(scores_per_class[i]))
+
+            for k, v in image_other_outputs.items():
+                detections[-1].update({k: torch.cat(v, dim=0)})
+        detections.append({
+            "boxes": all_boxes,
+            "labels": all_labels,
+            "scores": all_scores,
+            'al': al_idx,
+        })
+        return detections
+
     def forward(self, images, targets=None):
         # type: (List[Tensor], Optional[List[Dict[str, Tensor]]]) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]
         """
@@ -493,7 +591,7 @@ class RetinaNet(nn.Module):
                     if len(boxes.shape) != 2 or boxes.shape[-1] != 4:
                         raise ValueError("Expected target boxes to be a tensor"
                                          "of shape [N, 4], got {:}.".format(
-                                             boxes.shape))
+                            boxes.shape))
                 else:
                     raise ValueError("Expected target boxes to be of type "
                                      "Tensor, got {:}.".format(type(boxes)))
@@ -545,7 +643,12 @@ class RetinaNet(nn.Module):
             losses = self.compute_loss(targets, head_outputs, anchors)
         else:
             # compute the detections
-            detections = self.postprocess_detections(head_outputs, anchors, images.image_sizes)
+            print(self.ssm)
+            if self.ssm:
+                detections = self.ssm_postprocess_detections(head_outputs, anchors, images.image_sizes)
+                print(detections)
+            else:
+                detections = self.postprocess_detections(head_outputs, anchors, images.image_sizes)
             detections = self.transform.postprocess(detections, images.image_sizes, original_image_sizes)
 
         if torch.jit.is_scripting():
@@ -562,8 +665,8 @@ model_urls = {
 }
 
 
-def retinanet_resnet50_fpn(pretrained=False, progress=True,
-                           num_classes=91, pretrained_backbone=True, **kwargs):
+def retinanet_resnet50_fpn_ssm(pretrained=False, progress=True,
+                               num_classes=91, pretrained_backbone=True, **kwargs):
     """
     Constructs a RetinaNet model with a ResNet-50-FPN backbone.
     The input to the model is expected to be a list of tensors, each of shape ``[C, H, W]``, one for each
