@@ -34,7 +34,7 @@ from torchvision.models.detection.retinanet import retinanet_resnet50_fpn
 from cal4od.cal4od_helper import *
 from ll4al.data.sampler import SubsetSequentialSampler
 from detection.frcnn_la import fasterrcnn_resnet50_fpn_feature
-from detection.retinanet_cal import retinanet_mobilenet
+from detection.retinanet_cal import retinanet_mobilenet, retinanet_resnet50_fpn_cal
 
 
 def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
@@ -412,7 +412,7 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=600, max_size=1000)
+                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=600, max_size=1000)
         else:
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
@@ -431,8 +431,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    # task_model.ssm_mode(False)
-                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
                 return
             print("Getting stability")
             random.shuffle(unlabeled_set)
@@ -477,7 +476,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+                voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
             return
         print("Start training")
         start_time = time.time()
@@ -489,7 +488,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
         if not args.skip and cycle == 0:
             if 'faster' in args.model:
                 utils.save_on_master({

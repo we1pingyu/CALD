@@ -42,7 +42,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
-from detection.retinanet_cal import retinanet_mobilenet
+from detection.retinanet_cal import retinanet_mobilenet, retinanet_resnet50_fpn_cal
 from vaal.vaal_helper import *
 
 
@@ -203,7 +203,7 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=600, max_size=1000)
+                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=600, max_size=1000)
         else:
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
@@ -237,7 +237,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
+                voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
             return
         print("Start training")
         start_time = time.time()

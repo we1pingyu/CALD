@@ -561,7 +561,7 @@ model_urls = {
 
 
 def retinanet_resnet50_fpn(pretrained=False, progress=True,
-                           num_classes=91, pretrained_backbone=False, **kwargs):
+                           num_classes=91, pretrained_backbone=True, **kwargs):
     """
     Constructs a RetinaNet model with a ResNet-50-FPN backbone.
     The input to the model is expected to be a list of tensors, each of shape ``[C, H, W]``, one for each

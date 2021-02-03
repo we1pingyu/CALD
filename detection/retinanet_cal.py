@@ -625,7 +625,7 @@ def retinanet_resnet50_fpn_cal(pretrained=False, progress=True,
     return model
 
 
-def retinanet_mobilenet(pretrained=False, progress=True, num_classes=91, pretrained_backbone=False,
+def retinanet_mobilenet(pretrained=False, progress=True, num_classes=91, pretrained_backbone=True,
                         trainable_backbone_layers=None, min_size=320, max_size=640, **kwargs):
     """
     Constructs a RetinaNet model with a MobileNetV3-Large backbone. It works similarly

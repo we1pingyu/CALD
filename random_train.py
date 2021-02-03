@@ -42,7 +42,7 @@ from detection import utils
 from detection import transforms as T
 from detection.train import *
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
-from detection.retinanet_cal import retinanet_mobilenet
+from detection.retinanet_cal import retinanet_mobilenet, retinanet_resnet50_fpn_cal
 import pickle
 
 
@@ -57,7 +57,6 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
     if epoch == 0:
         warmup_factor = 1. / 1000
         warmup_iters = min(1000, len(data_loader) - 1)
-
         task_lr_scheduler = utils.warmup_lr_scheduler(task_optimizer, warmup_iters, warmup_factor)
 
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
@@ -78,6 +77,7 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
 
         task_optimizer.zero_grad()
         losses.backward()
+        torch.nn.utils.clip_grad_norm_(task_model.parameters(), max_norm=0.1, norm_type=2)
         task_optimizer.step()
         if task_lr_scheduler is not None:
             task_lr_scheduler.step()
@@ -137,12 +137,12 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=600, max_size=1000)
+                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=320, max_size=640)
         else:
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=800, max_size=1333)
+                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=320, max_size=640)
         task_model.to(device)
         if not args.init and cycle == 0 and args.skip:
             if 'faster' in args.model:

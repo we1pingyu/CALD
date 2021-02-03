@@ -37,7 +37,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from detection.frcnn_ll import fasterrcnn_resnet50_fpn_feature
-from detection.retina_ll import retinanet_mobilenet
+from detection.retina_ll import retinanet_mobilenet, retinanet_resnet50_fpn
 from detection.coco_utils import get_coco, get_coco_kp
 from detection.group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from detection.engine import coco_evaluate, voc_evaluate
@@ -108,9 +108,9 @@ def train_one_epoch(task_model, task_optimizer, ll_model, ll_optimizer, data_loa
                 # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
                 _features = dict()
                 _features['0'] = features[0]
-                _features['1'] = features[0]
-                _features['2'] = features[0]
-                _features['3'] = features[0]
+                _features['1'] = features[1]
+                _features['2'] = features[2]
+                _features['3'] = features[3]
             else:
                 _features = dict()
                 _features['0'] = features[0]
@@ -155,9 +155,9 @@ def get_uncertainty(task_model, ll_model, unlabeled_loader):
             if 'retina' in args.model:
                 _features = dict()
                 _features['0'] = features[0].detach()
-                _features['1'] = features[1].detach()
-                _features['2'] = features[2].detach()
-                _features['3'] = features[3].detach()
+                _features['1'] = features[0].detach()
+                _features['2'] = features[0].detach()
+                _features['3'] = features[0].detach()
                 ll_pred = ll_model(_features)  # pred_loss = criterion(scores, labels) # ground truth loss
             else:
                 ll_pred = ll_model(features)  # pred_loss = criterion(scores, labels) # ground truth loss
@@ -217,12 +217,12 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=600, max_size=1000)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=600, max_size=1000)
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=320, max_size=640)
         else:
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn_feature(num_classes=num_classes, min_size=800, max_size=1333)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=800, max_size=1333)
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]
