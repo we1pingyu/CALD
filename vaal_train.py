@@ -110,7 +110,11 @@ def train_one_epoch(task_model, task_optimizer, vae, vae_optimizer, discriminato
         lab_real_preds = torch.ones(len(labeled_imgs)).cuda()
         unlab_real_preds = torch.ones(len(unlabeled_imgs)).cuda()
 
-        dsc_loss = bce_loss(labeled_preds, lab_real_preds) + bce_loss(unlabeled_preds, unlab_real_preds)
+        if not len(labeled_preds.shape) == len(lab_real_preds.shape):
+            dsc_loss = bce_loss(labeled_preds, lab_real_preds.unsqueeze(1)) + bce_loss(unlabeled_preds,
+                                                                                       unlab_real_preds.unsqueeze(1))
+        else:
+            dsc_loss = bce_loss(labeled_preds, lab_real_preds) + bce_loss(unlabeled_preds, unlab_real_preds)
         total_vae_loss = unsup_loss + transductive_loss + dsc_loss
         vae_optimizer.zero_grad()
         total_vae_loss.backward()
@@ -127,8 +131,11 @@ def train_one_epoch(task_model, task_optimizer, vae, vae_optimizer, discriminato
         lab_real_preds = torch.ones(len(labeled_imgs)).cuda()
         unlab_fake_preds = torch.zeros(len(unlabeled_imgs)).cuda()
 
-        dsc_loss = bce_loss(labeled_preds, lab_real_preds) + bce_loss(unlabeled_preds, unlab_fake_preds)
-
+        if not len(labeled_preds.shape) == len(lab_real_preds.shape):
+            dsc_loss = bce_loss(labeled_preds, lab_real_preds.unsqueeze(1)) + bce_loss(unlabeled_preds,
+                                                                                       unlab_fake_preds.unsqueeze(1))
+        else:
+            dsc_loss = bce_loss(labeled_preds, lab_real_preds) + bce_loss(unlabeled_preds, unlab_fake_preds)
         discriminator_optimizer.zero_grad()
         dsc_loss.backward()
         discriminator_optimizer.step()
@@ -230,7 +237,7 @@ def main(args):
             if 'coco' in args.dataset:
                 coco_evaluate(task_model, data_loader_test)
             elif 'voc' in args.dataset:
-                voc_evaluate(task_model, data_loader_test, args.dataset)
+                voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
             return
         print("Start training")
         start_time = time.time()

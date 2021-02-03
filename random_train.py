@@ -43,6 +43,7 @@ from detection import transforms as T
 from detection.train import *
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.retinanet import retinanet_resnet50_fpn
+import pickle
 
 
 def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
@@ -159,7 +160,9 @@ def main(args):
             random.shuffle(unlabeled_set)
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += unlabeled_set[:budget_num]
-            unlabeled_set = unlabeled_set[budget_num:]
+            # with open("vis/cycle_{}.txt".format(cycle), "rb") as fp:  # Unpickling
+            #     labeled_set = pickle.load(fp)
+            unlabeled_set = list(set(indices) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
             train_sampler = SubsetRandomSampler(labeled_set)
@@ -185,7 +188,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
         if not args.skip and cycle == 0:
             if 'faster' in args.model:
                 utils.save_on_master({

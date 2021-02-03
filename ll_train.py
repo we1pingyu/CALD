@@ -23,6 +23,7 @@ import time
 import random
 import math
 import sys
+import pickle
 
 import torch
 import torch.utils.data
@@ -87,12 +88,12 @@ def train_one_epoch(task_model, task_optimizer, ll_model, ll_optimizer, data_loa
             task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
             task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
             task_loss_value = task_losses_reduced.item()
-            # if epoch > args.task_epochs:
-            # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
-            features['0'] = features['0'].detach()
-            features['1'] = features['1'].detach()
-            features['2'] = features['2'].detach()
-            features['3'] = features['3'].detach()
+            if epoch >= args.task_epochs:
+                # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
+                features['0'] = features['0'].detach()
+                features['1'] = features['1'].detach()
+                features['2'] = features['2'].detach()
+                features['3'] = features['3'].detach()
             ll_pred = ll_model(features).cuda()
         elif 'retina' in args.model:
             _task_losses = sum(torch.stack(loss[1]) for loss in task_loss_dict.values())
@@ -104,13 +105,19 @@ def train_one_epoch(task_model, task_optimizer, ll_model, ll_optimizer, data_loa
             task_loss_dict_reduced = utils.reduce_dict(task_loss_dict)
             task_losses_reduced = sum(loss.cpu() for loss in task_loss_dict_reduced.values())
             task_loss_value = task_losses_reduced.item()
-            # if epoch > args.task_epochs:
-            # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
-            _features = dict()
-            _features['0'] = features[0].detach()
-            _features['1'] = features[1].detach()
-            _features['2'] = features[2].detach()
-            _features['3'] = features[3].detach()
+            if epoch >= args.task_epochs:
+                # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
+                _features = dict()
+                _features['0'] = features[0].detach()
+                _features['1'] = features[1].detach()
+                _features['2'] = features[2].detach()
+                _features['3'] = features[3].detach()
+            else:
+                _features = dict()
+                _features['0'] = features[0]
+                _features['1'] = features[1]
+                _features['2'] = features[2]
+                _features['3'] = features[3]
             ll_pred = ll_model(_features).cuda()
         ll_pred = ll_pred.view(ll_pred.size(0))
         ll_loss = args.ll_weight * LossPredLoss(ll_pred, _task_losses, margin=MARGIN)
@@ -244,11 +251,11 @@ def main(args):
             task_lr_scheduler.step()
             ll_lr_scheduler.step()
             # evaluate after pre-set epoch
-            if (epoch + 1) == args.task_epochs or (epoch + 1) == args.total_epochs:
+            if (epoch + 1) == args.total_epochs:
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test, feature=True)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset, True)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, True, path=args.results_path)
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
             subset = unlabeled_set[:10000]
@@ -263,6 +270,8 @@ def main(args):
 
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += list(torch.tensor(subset)[arg][-1 * budget_num:].numpy())
+        with open("vis/ll_{}_{}_{}.txt".format(args.model, args.dataset, cycle), "wb") as fp:  # Pickling
+            pickle.dump(labeled_set, fp)
         unlabeled_set = list(set(indices) - set(labeled_set))
 
         # Create a new dataloader for the updated labeled dataset
@@ -287,7 +296,7 @@ if __name__ == "__main__":
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
                         help='path to save checkpoint of first cycle')
-    parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
+    parser.add_argument('--task_epochs', default=0, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')

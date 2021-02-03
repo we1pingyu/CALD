@@ -107,8 +107,8 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                 output = task_model([F.to_tensor(image).cuda()])
                 ref_boxes, prob_max, ref_scores_cls, ref_labels, ref_scores = output[0]['boxes'], output[0][
                     'prob_max'], output[0]['scores_cls'], output[0]['labels'], output[0]['scores']
-                if len(ref_scores) > 50:
-                    inds = torch.topk(ref_scores, 20)[1]
+                if len(ref_scores) > 30:
+                    inds = torch.topk(ref_scores, 30)[1]
                     ref_boxes, prob_max, ref_scores_cls, ref_labels, ref_scores = ref_boxes[inds], prob_max[
                         inds], ref_scores_cls[inds], ref_labels[inds], ref_scores[inds]
                 # print(torch.argmax(ref_scores))
@@ -392,7 +392,6 @@ def main(args):
         unlabeled_set = list(set(indices) - set(labeled_set))
     else:
         labeled_set = indices[:init_num]
-        print(labeled_set)
         unlabeled_set = list(set(indices) - set(labeled_set))
     train_sampler = SubsetRandomSampler(labeled_set)
     data_loader_test = DataLoader(dataset_test, batch_size=1, sampler=SequentialSampler(dataset_test),
@@ -454,6 +453,8 @@ def main(args):
                 # Update the labeled dataset and the unlabeled dataset, respectively
                 tobe_labeled_set = list(torch.tensor(subset)[arg][tobe_labeled_set].numpy())
                 labeled_set += tobe_labeled_set
+                with open("vis/cal_{}_{}_{}.txt".format(args.model, args.dataset, cycle), "wb") as fp:  # Pickling
+                    pickle.dump(labeled_set, fp)
                 unlabeled_set = list(set(indices) - set(labeled_set))
             else:
                 unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -517,6 +518,8 @@ def main(args):
             # Update the labeled dataset and the unlabeled dataset, respectively
             tobe_labeled_set = list(torch.tensor(subset)[arg][tobe_labeled_set].numpy())
             labeled_set += tobe_labeled_set
+            with open("vis/cal_{}_{}_{}.txt".format(args.model, args.dataset, cycle), "wb") as fp:  # Pickling
+                pickle.dump(labeled_set, fp)
             unlabeled_set = list(set(indices) - set(labeled_set))
         else:
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -548,7 +551,7 @@ if __name__ == "__main__":
                         help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('-cp', '--first-checkpoint-path', default='/data/yuweiping/coco/',
                         help='path to save checkpoint of first cycle')
-    parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
+    parser.add_argument('--task_epochs', default=26, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')

@@ -118,6 +118,9 @@ def get_uncertainty(task_model, unlabeled_loader, aves=None):
                 if ref_boxes.shape[0] == 0:
                     stability_all.append(0.0)
                     break
+                if len(ref_boxes) > 30:
+                    inds = torch.topk(prob_max, 30)[1]
+                    ref_boxes, prob_max, ref_labels = ref_boxes[inds], prob_max[inds], ref_labels[inds]
                 stability_img = [0.0] * len(ref_boxes)
                 U = torch.max(1 - prob_max).item()
                 # print(U)
