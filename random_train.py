@@ -42,7 +42,8 @@ from detection import utils
 from detection import transforms as T
 from detection.train import *
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
-from detection.retinanet_cal import retinanet_mobilenet, retinanet_resnet50_fpn_cal
+from torchvision.models.detection.retinanet import retinanet_resnet50_fpn
+# from detection.retinanet_cal import retinanet_mobilenet, retinanet_resnet50_fpn_cal
 import pickle
 
 
@@ -77,7 +78,6 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
 
         task_optimizer.zero_grad()
         losses.backward()
-        torch.nn.utils.clip_grad_norm_(task_model.parameters(), max_norm=0.1, norm_type=2)
         task_optimizer.step()
         if task_lr_scheduler is not None:
             task_lr_scheduler.step()
@@ -112,7 +112,7 @@ def main(args):
         init_num = 500
         budget_num = 500
         if 'retina' in args.model:
-            init_num = 2000
+            init_num = 500
             budget_num = 500
     else:
         init_num = 5000
@@ -140,12 +140,12 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
             elif 'retina' in args.model:
-                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=600, max_size=1000)
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         else:
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
             elif 'retina' in args.model:
-                task_model = retinanet_mobilenet(num_classes=num_classes, min_size=320, max_size=640)
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         task_model.to(device)
         if not args.init and cycle == 0 and args.skip:
             if 'faster' in args.model:

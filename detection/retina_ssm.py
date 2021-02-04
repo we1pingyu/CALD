@@ -643,7 +643,7 @@ class RetinaNet(nn.Module):
             losses = self.compute_loss(targets, head_outputs, anchors)
         else:
             # compute the detections
-            print(self.ssm)
+            # print(self.ssm)
             if self.ssm:
                 detections = self.ssm_postprocess_detections(head_outputs, anchors, images.image_sizes)
                 print(detections)

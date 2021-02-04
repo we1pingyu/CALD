@@ -107,10 +107,10 @@ def train_one_epoch(task_model, task_optimizer, ll_model, ll_optimizer, data_loa
             if epoch >= args.task_epochs:
                 # After EPOCHL epochs, stop the gradient from the loss prediction module propagated to the target model.
                 _features = dict()
-                _features['0'] = features[0]
-                _features['1'] = features[1]
-                _features['2'] = features[2]
-                _features['3'] = features[3]
+                _features['0'] = features[0].detach()
+                _features['1'] = features[1].detach()
+                _features['2'] = features[2].detach()
+                _features['3'] = features[3].detach()
             else:
                 _features = dict()
                 _features['0'] = features[0]
@@ -190,7 +190,7 @@ def main(args):
         init_num = 500
         budget_num = 500
         if 'retina' in args.model:
-            init_num = 2000
+            init_num = 500
             budget_num = 500
     else:
         init_num = 5000

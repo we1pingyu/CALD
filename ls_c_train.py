@@ -182,7 +182,7 @@ def main(args):
         init_num = 500
         budget_num = 500
         if 'retina' in args.model:
-            init_num = 2000
+            init_num = 1000
             budget_num = 500
     else:
         init_num = 5000
@@ -225,10 +225,12 @@ def main(args):
                 checkpoint = torch.load(os.path.join(args.first_checkpoint_path,
                                                      '{}_retinanet_1st.pth'.format(args.dataset)), map_location='cpu')
             task_model.load_state_dict(checkpoint['model'])
-            # if 'coco' in args.dataset:
-            #     coco_evaluate(task_model, data_loader_test)
-            # elif 'voc' in args.dataset:
-            #     voc_evaluate(task_model, data_loader_test, args.dataset)
+            if args.test_only:
+                if 'coco' in args.dataset:
+                    coco_evaluate(task_model, data_loader_test)
+                elif 'voc' in args.dataset:
+                    voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
+                return
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
@@ -315,7 +317,7 @@ if __name__ == "__main__":
                         help='path to save checkpoint of first cycle')
     parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
+    parser.add_argument('-e', '--total_epochs', default=26, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--cycles', default=7, type=int, metavar='N',
                         help='number of cycles epochs to run')
@@ -332,7 +334,7 @@ if __name__ == "__main__":
                         metavar='W', help='weight decay (default: 1e-4)',
                         dest='weight_decay')
     parser.add_argument('--lr-step-size', default=8, type=int, help='decrease lr every step-size epochs')
-    parser.add_argument('--lr-steps', default=[16, 19], nargs='+', type=int, help='decrease lr every step-size epochs')
+    parser.add_argument('--lr-steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')

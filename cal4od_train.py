@@ -48,8 +48,8 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
     if epoch == 0:
         warmup_factor = 1. / 1000
         warmup_iters = min(1000, len(data_loader) - 1)
-
         task_lr_scheduler = utils.warmup_lr_scheduler(task_optimizer, warmup_iters, warmup_factor)
+
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -107,8 +107,10 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                 output = task_model([F.to_tensor(image).cuda()])
                 ref_boxes, prob_max, ref_scores_cls, ref_labels, ref_scores = output[0]['boxes'], output[0][
                     'prob_max'], output[0]['scores_cls'], output[0]['labels'], output[0]['scores']
-                if len(ref_scores) > 30:
-                    inds = torch.topk(ref_scores, 30)[1]
+                if len(ref_scores) > 50:
+                    # inds = random.sample(range(0, len(ref_scores)), k=30)
+                    inds = np.round(np.linspace(0, len(ref_scores) - 1, 50)).astype(int)
+                    # print(len(set(inds)))
                     ref_boxes, prob_max, ref_scores_cls, ref_labels, ref_scores = ref_boxes[inds], prob_max[
                         inds], ref_scores_cls[inds], ref_labels[inds], ref_scores[inds]
                 # print(torch.argmax(ref_scores))
@@ -377,7 +379,7 @@ def main(args):
         init_num = 500
         budget_num = 500
         if 'retina' in args.model:
-            init_num = 2000
+            init_num = 500
             budget_num = 500
     else:
         init_num = 5000
@@ -572,7 +574,7 @@ if __name__ == "__main__":
                         metavar='W', help='weight decay (default: 1e-4)',
                         dest='weight_decay')
     parser.add_argument('--lr-step-size', default=8, type=int, help='decrease lr every step-size epochs')
-    parser.add_argument('--lr-steps', default=[16, 19], nargs='+', type=int, help='decrease lr every step-size epochs')
+    parser.add_argument('--lr-steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')
@@ -588,7 +590,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', "--mutual", dest="mutual", help="use mutual information",
                         action="store_true")
     parser.add_argument('-mr', default=1.2, type=float, help='mutual range')
-    parser.add_argument('-bp', default=1.15, type=float, help='base point')
+    parser.add_argument('-bp', default=1.2, type=float, help='base point')
     parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
                         action="store_true")
     # distributed training parameters

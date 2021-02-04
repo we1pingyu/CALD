@@ -42,7 +42,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from torchvision.models.detection.faster_rcnn import fasterrcnn_resnet50_fpn
-from detection.retinanet_cal import retinanet_mobilenet, retinanet_resnet50_fpn_cal
+from torchvision.models.detection.retinanet import retinanet_resnet50_fpn
 from vaal.vaal_helper import *
 
 
@@ -172,7 +172,7 @@ def main(args):
         init_num = 500
         budget_num = 500
         if 'retina' in args.model:
-            init_num = 2000
+            init_num = 1000
             budget_num = 500
     else:
         init_num = 5000
@@ -206,12 +206,12 @@ def main(args):
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
             elif 'retina' in args.model:
-                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=600, max_size=1000)
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=600, max_size=1000)
         else:
             if 'faster' in args.model:
                 task_model = fasterrcnn_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
             elif 'retina' in args.model:
-                task_model = retinanet_resnet50_fpn_cal(num_classes=num_classes, min_size=800, max_size=1333)
+                task_model = retinanet_resnet50_fpn(num_classes=num_classes, min_size=800, max_size=1333)
         task_model.to(device)
 
         params = [p for p in task_model.parameters() if p.requires_grad]
