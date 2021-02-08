@@ -268,7 +268,7 @@ def intersect(boxes1, boxes2):
 import matplotlib.pyplot as plt
 
 
-def draw_PIL_image(image, boxes, labels, scores, name, no=None, color='greenyellow'):
+def draw_PIL_image(image, boxes, labels, scores, name):
     if type(image) != PIL.Image.Image:
         image = F.to_pil_image(image)
     plt.imshow(image)
@@ -279,20 +279,15 @@ def draw_PIL_image(image, boxes, labels, scores, name, no=None, color='greenyell
     plt.margins(0, 0)
     plt.gca().xaxis.set_major_locator(plt.NullLocator())
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
-    i = 0
-    if no is not None:
-        for n in no:
-            if i >= 1:
-                color = 'greenyellow'
-            else:
-                color = 'red'
-            i += 1
-            x, y = boxes[n][0], boxes[n][1]
-            w, h = boxes[n][2] - boxes[n][0], boxes[n][3] - boxes[n][1]
-            plt.gca().add_patch(plt.Rectangle((x, y), w, h, fill=False, edgecolor=color, linewidth=2.5))
-            plt.text(x, y, '{}={}'.format(voc_labels[labels[n]], scores[n]), color='color', verticalalignment='bottom',
-                     fontsize=4)
-    plt.savefig('vis/{}.jpg'.format(name), dpi=128, bbox_inches='tight', pad_inches=0)
+    # for i in range(len(boxes)):
+    #     x, y = boxes[i][0], boxes[i][1]
+    #     w, h = boxes[i][2] - boxes[i][0], boxes[i][3] - boxes[i][1]
+    #     plt.gca().add_patch(
+    #         plt.Rectangle((x, y), w, h, fill=False, edgecolor=label_color_map[rev_label_map[labels[i].item()]],
+    #                       linewidth=2.5))
+    #     # plt.text(x, y, '{}={}'.format(voc_labels[labels[n]], scores[n]), color='color', verticalalignment='bottom',
+    #     #              fontsize=4)
+    plt.savefig('vis/{}.png'.format(name), dpi=256, bbox_inches='tight', pad_inches=0)
     # plt.show()
     plt.cla()
 

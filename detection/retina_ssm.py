@@ -522,18 +522,25 @@ class RetinaNet(nn.Module):
             if torch.max(scores_per_image) < CONF_THRESH:
                 # print(scores)
                 al_idx = 1
+                detections.append({
+                    "boxes": all_boxes,
+                    "labels": all_labels,
+                    "scores": all_scores,
+                    'al': al_idx,
+                })
                 continue
             for class_index in range(num_classes):
                 # remove low scoring boxes
                 inds = torch.gt(scores_per_image[:, class_index], self.score_thresh)
-                boxes_per_class, scores_per_class, labels_per_class = \
-                    boxes_per_image[inds], scores_per_image[inds, class_index], labels_per_image[inds, class_index]
+                boxes_per_class, scores_per_class, scores_all_class, labels_per_class = \
+                    boxes_per_image[inds], scores_per_image[inds, class_index], scores_per_image[inds], \
+                    labels_per_image[inds, class_index]
                 other_outputs_per_class = [(k, v[inds]) for k, v in other_outputs_per_image]
 
                 # remove empty boxes
                 keep = box_ops.remove_small_boxes(boxes_per_class, min_size=1e-2)
-                boxes_per_class, scores_per_class, labels_per_class = \
-                    boxes_per_class[keep], scores_per_class[keep], labels_per_class[keep]
+                boxes_per_class, scores_per_class, scores_all_class, labels_per_class = \
+                    boxes_per_class[keep], scores_per_class[keep], scores_all_class[keep], labels_per_class[keep]
                 other_outputs_per_class = [(k, v[keep]) for k, v in other_outputs_per_class]
 
                 # non-maximum suppression, independently done per class
@@ -541,8 +548,8 @@ class RetinaNet(nn.Module):
 
                 # keep only topk scoring predictions
                 keep = keep[:self.detections_per_img]
-                boxes_per_class, scores_per_class, labels_per_class = \
-                    boxes_per_class[keep], scores_per_class[keep], labels_per_class[keep]
+                boxes_per_class, scores_per_class, scores_all_class, labels_per_class = \
+                    boxes_per_class[keep], scores_per_class[keep], scores_all_class[keep], labels_per_class[keep]
                 other_outputs_per_class = [(k, v[keep]) for k, v in other_outputs_per_class]
 
                 image_boxes.append(boxes_per_class)
@@ -553,19 +560,20 @@ class RetinaNet(nn.Module):
                     if k not in image_other_outputs:
                         image_other_outputs[k] = []
                     image_other_outputs[k].append(v)
-                for i in len(boxes_per_class):
+
+                for i in range(len(boxes_per_class)):
                     all_boxes = torch.cat((all_boxes, boxes_per_class[i].unsqueeze(0)), 0)
                     all_scores = torch.cat((all_scores, scores_per_class[i].unsqueeze(0)), 0)
-                    all_labels.append(judge_y(scores_per_class[i]))
-
+                    all_labels.append(judge_y(scores_all_class[i][1:]))
+            detections.append({
+                "boxes": all_boxes,
+                "labels": all_labels,
+                "scores": all_scores,
+                'al': al_idx,
+            })
             for k, v in image_other_outputs.items():
                 detections[-1].update({k: torch.cat(v, dim=0)})
-        detections.append({
-            "boxes": all_boxes,
-            "labels": all_labels,
-            "scores": all_scores,
-            'al': al_idx,
-        })
+
         return detections
 
     def forward(self, images, targets=None):
@@ -646,7 +654,6 @@ class RetinaNet(nn.Module):
             # print(self.ssm)
             if self.ssm:
                 detections = self.ssm_postprocess_detections(head_outputs, anchors, images.image_sizes)
-                print(detections)
             else:
                 detections = self.postprocess_detections(head_outputs, anchors, images.image_sizes)
             detections = self.transform.postprocess(detections, images.image_sizes, original_image_sizes)

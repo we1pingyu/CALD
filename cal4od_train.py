@@ -36,6 +36,8 @@ from ll4al.data.sampler import SubsetSequentialSampler
 from detection.frcnn_la import fasterrcnn_resnet50_fpn_feature
 from detection.retinanet_cal import retinanet_mobilenet, retinanet_resnet50_fpn_cal
 
+A = 1
+
 
 def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoch, print_freq):
     task_model.train()
@@ -53,6 +55,10 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        # global A
+        # for image, target in zip(images, targets):
+        #     draw_PIL_image(image, target['boxes'], target['labels'], None, "unlabeled_{}".format(A))
+        #     A += 1
         task_loss_dict = task_model(images, targets)
         task_losses = sum(loss for loss in task_loss_dict.values())
         # reduce losses over all GPUs for logging purposes
@@ -203,8 +209,8 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                 for output, aug_box, aug_image in zip(outputs, aug_boxes, aug_images):
                     consistency_img = 1.0
                     mean_img = []
-                    boxes, scores_cls, pm, labels = output['boxes'], output['scores_cls'], output['prob_max'], output[
-                        'labels']
+                    boxes, scores_cls, pm, labels, scores = output['boxes'], output['scores_cls'], output['prob_max'], \
+                                                            output['labels'], output['scores']
                     cls_corr = [0] * (num_cls - 1)
                     for p, l in zip(pm, labels):
                         # if p.item() > 0.4:
@@ -217,7 +223,7 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                         continue
                     j = 0
                     no = []
-                    for ab, ref_score_cls, ref_pm in zip(aug_box, ref_scores_cls, prob_max):
+                    for ab, ref_score_cls, ref_pm, ref_score in zip(aug_box, ref_scores_cls, prob_max, ref_scores):
                         width = torch.min(ab[2], boxes[:, 2]) - torch.max(ab[0], boxes[:, 0])
                         height = torch.min(ab[3], boxes[:, 3]) - torch.max(ab[1], boxes[:, 1])
                         Aarea = (ab[2] - ab[0]) * (ab[3] - ab[1])
@@ -232,13 +238,13 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                         js = 0.5 * scipy.stats.entropy(p, m) + 0.5 * scipy.stats.entropy(q, m)
                         if js < 0:
                             js = 0
-                        # if 0.6 > torch.max(iou) > 0.4 and 0.4 < 0.5 * (1 - js) * (
-                        #         ref_pm + pm[torch.argmax(iou)]) < 0.6 and (ab[2] - ab[0]) > 200 and \
-                        #         torch.max(ref_score_cls) < 0.6 and pm[torch.argmax(iou)] < 0.6:
+                        # if 0.7 < torch.max(iou) and 0.4 > 0.5 * (1 - js) * (
+                        #         ref_pm + pm[torch.argmax(iou)]) and (ab[2] - ab[0]) > 100 and scores[
+                        #     torch.argmax(iou)] > 0.4 and ref_score > 0.4:
                         #     # draw_PIL_image(image, boxes, ref_labels, i, no=[ab], color='greenyellow')
                         #     no = [j, torch.argmax(iou).item()]
                         #     draw_PIL_image_2(aug_image.cpu(), aug_box, boxes, ref_labels, labels, ref_scores, pm,
-                        #                      'bad', no=no, color='red')
+                        #                      'bad_2', no=no, color='red')
                         #     print(1 / 0)
                         j += 1
                         consistency_img = min(consistency_img, torch.abs(
@@ -379,7 +385,7 @@ def main(args):
         init_num = 500
         budget_num = 500
         if 'retina' in args.model:
-            init_num = 500
+            init_num = 1000
             budget_num = 500
     else:
         init_num = 5000
@@ -441,14 +447,23 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:10000]
+                subset = unlabeled_set[:5000]
             else:
                 subset = unlabeled_set
             if args.mutual:
                 unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                               num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
                 uncertainty, _cls_corrs = get_uncertainty(task_model, unlabeled_loader, augs, num_classes)
+                # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+                #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+                # u, _ = get_uncertainty(task_model, labeled_loader, augs, num_classes)
+                # with open("vis/cal_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                #           "wb") as fp:  # Pickling
+                #     pickle.dump(u, fp)
                 arg = np.argsort(np.array(uncertainty))
+                # with open("vis/cal_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                #           "wb") as fp:  # Pickling
+                #     pickle.dump(torch.tensor(uncertainty)[arg][:budget_num].numpy(), fp)
                 cls_corrs_set = arg[:int(args.mr * budget_num)]
                 cls_corrs = [_cls_corrs[i] for i in cls_corrs_set]
                 labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
@@ -457,8 +472,6 @@ def main(args):
                 # Update the labeled dataset and the unlabeled dataset, respectively
                 tobe_labeled_set = list(torch.tensor(subset)[arg][tobe_labeled_set].numpy())
                 labeled_set += tobe_labeled_set
-                with open("vis/cal_{}_{}_{}.txt".format(args.model, args.dataset, cycle), "wb") as fp:  # Pickling
-                    pickle.dump(labeled_set, fp)
                 unlabeled_set = list(set(indices) - set(labeled_set))
             else:
                 unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -467,6 +480,7 @@ def main(args):
                 arg = np.argsort(np.array(uncertainty))
                 # Update the labeled dataset and the unlabeled dataset, respectively
                 labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+                labeled_set = list(set(labeled_set))
                 unlabeled_set = list(set(indices) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
@@ -494,18 +508,18 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
-        if not args.skip and cycle == 0:
-            if 'faster' in args.model:
-                utils.save_on_master({
-                    'model': task_model.state_dict(), 'args': args},
-                    os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
-            elif 'retina' in args.model:
-                utils.save_on_master({
-                    'model': task_model.state_dict(), 'args': args},
-                    os.path.join(args.first_checkpoint_path, '{}_retinanet_1st.pth'.format(args.dataset)))
+        # if not args.skip and cycle == 0:
+        #     if 'faster' in args.model:
+        #         utils.save_on_master({
+        #             'model': task_model.state_dict(), 'args': args},
+        #             os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
+        #     elif 'retina' in args.model:
+        #         utils.save_on_master({
+        #             'model': task_model.state_dict(), 'args': args},
+        #             os.path.join(args.first_checkpoint_path, '{}_retinanet_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:10000]
+            subset = unlabeled_set[:5000]
         else:
             subset = unlabeled_set
         print("Getting stability")
@@ -513,7 +527,16 @@ def main(args):
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
             uncertainty, _cls_corrs = get_uncertainty(task_model, unlabeled_loader, augs, num_classes)
+            labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+                                        num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            # u, _ = get_uncertainty(task_model, labeled_loader, augs, num_classes)
+            # with open("vis/cal_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+            #           "wb") as fp:  # Pickling
+            #     pickle.dump(u, fp)
             arg = np.argsort(np.array(uncertainty))
+            # with open("vis/cal_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+            #           "wb") as fp:  # Pickling
+            #     pickle.dump(torch.tensor(uncertainty)[arg][:budget_num].numpy(), fp)
             cls_corrs_set = arg[:int(args.mr * budget_num)]
             cls_corrs = [_cls_corrs[i] for i in cls_corrs_set]
             labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
@@ -522,8 +545,8 @@ def main(args):
             # Update the labeled dataset and the unlabeled dataset, respectively
             tobe_labeled_set = list(torch.tensor(subset)[arg][tobe_labeled_set].numpy())
             labeled_set += tobe_labeled_set
-            with open("vis/cal_{}_{}_{}.txt".format(args.model, args.dataset, cycle), "wb") as fp:  # Pickling
-                pickle.dump(labeled_set, fp)
+            # with open("vis/cal_{}_{}_{}.txt".format(args.model, args.dataset, cycle), "wb") as fp:  # Pickling
+            #     pickle.dump(labeled_set, fp)
             unlabeled_set = list(set(indices) - set(labeled_set))
         else:
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -532,6 +555,7 @@ def main(args):
             arg = np.argsort(np.array(uncertainty))
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+            labeled_set = list(set(labeled_set))
             unlabeled_set = list(set(indices) - set(labeled_set))
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)

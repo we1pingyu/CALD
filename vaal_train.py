@@ -255,7 +255,7 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
         # Update the labeled dataset and the unlabeled dataset, respectively
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:

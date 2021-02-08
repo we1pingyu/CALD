@@ -63,7 +63,6 @@ def train_one_epoch(task_model, task_optimizer, data_loader, device, cycle, epoc
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
         task_loss_dict = task_model(images, targets)
         task_losses = sum(loss for loss in task_loss_dict.values())
         # reduce losses over all GPUs for logging purposes
@@ -109,10 +108,10 @@ def main(args):
     print("Creating data loaders")
     num_images = len(dataset)
     if 'voc' in args.dataset:
-        init_num = 500
+        init_num = 1000
         budget_num = 500
         if 'retina' in args.model:
-            init_num = 500
+            init_num = 1000
             budget_num = 500
     else:
         init_num = 5000
@@ -161,8 +160,13 @@ def main(args):
             #     voc_evaluate(task_model, data_loader_test, args.dataset)
             print("Getting stability")
             random.shuffle(unlabeled_set)
+            if 'coco' in args.dataset:
+                subset = unlabeled_set[:5000]
+            else:
+                subset = unlabeled_set
             # Update the labeled dataset and the unlabeled dataset, respectively
-            labeled_set += unlabeled_set[:budget_num]
+            labeled_set += subset[:budget_num]
+            labeled_set = list(set(labeled_set))
             # with open("vis/cycle_{}.txt".format(cycle), "rb") as fp:  # Unpickling
             #     labeled_set = pickle.load(fp)
             unlabeled_set = list(set(indices) - set(labeled_set))
@@ -204,6 +208,7 @@ def main(args):
         random.shuffle(unlabeled_set)
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += unlabeled_set[:budget_num]
+        labeled_set = list(set(labeled_set))
         unlabeled_set = unlabeled_set[budget_num:]
         # Create a new dataloader for the updated labeled dataset
         train_sampler = SubsetRandomSampler(labeled_set)

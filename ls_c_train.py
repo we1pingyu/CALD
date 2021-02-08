@@ -25,6 +25,7 @@ import math
 import sys
 import numpy as np
 import math
+import pickle
 
 import torchvision.transforms.functional as F
 import torch
@@ -234,16 +235,25 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:10000]
+                subset = unlabeled_set[:5000]
             else:
                 subset = unlabeled_set
+            # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+            #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            # u = get_uncertainty(task_model, labeled_loader)
+            # with open("vis/lsc_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+            #           "wb") as fp:  # Pickling
+            #     pickle.dump(u, fp)
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
             uncertainty = get_uncertainty(task_model, unlabeled_loader)
             arg = np.argsort(uncertainty)
-
+            # with open("vis/lsc_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+            #           "wb") as fp:  # Pickling
+            #     pickle.dump(torch.tensor(uncertainty)[arg][:int(budget_num)].numpy(), fp)
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+            labeled_set = list(set(labeled_set))
             unlabeled_set = list(set(indices) - set(labeled_set))
 
             # Create a new dataloader for the updated labeled dataset
@@ -271,26 +281,33 @@ def main(args):
                 if 'coco' in args.dataset:
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
-                    voc_evaluate(task_model, data_loader_test, args.dataset)
+                    voc_evaluate(task_model, data_loader_test, args.dataset, path=args.results_path)
         # if not args.skip and cycle == 0:
         #     utils.save_on_master({
         #         'model': task_model.state_dict(), 'args': args},
         #         os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:10000]
+            subset = unlabeled_set[:5000]
         else:
             subset = unlabeled_set
-        unlabeled_loader = DataLoader(dataset_aug, batch_size=1,
-                                      sampler=SubsetSequentialSampler(subset), num_workers=args.workers,
-                                      # more convenient if we maintain the order of subset
-                                      pin_memory=True, collate_fn=utils.collate_fn)
-        print("Getting stability")
+        # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+        #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+        # u = get_uncertainty(task_model, labeled_loader)
+        # with open("vis/lsc_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+        #           "wb") as fp:  # Pickling
+        #     pickle.dump(u, fp)
+        unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                      num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
+        # with open("vis/lsc_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+        #           "wb") as fp:  # Pickling
+        #     pickle.dump(torch.tensor(uncertainty)[arg][:int(budget_num)].numpy(), fp)
 
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
+        labeled_set = list(set(labeled_set))
         unlabeled_set = list(torch.tensor(subset)[arg][budget_num:].numpy())
 
         # Create a new dataloader for the updated labeled dataset
@@ -317,7 +334,7 @@ if __name__ == "__main__":
                         help='path to save checkpoint of first cycle')
     parser.add_argument('--task_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
-    parser.add_argument('-e', '--total_epochs', default=26, type=int, metavar='N',
+    parser.add_argument('-e', '--total_epochs', default=20, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--cycles', default=7, type=int, metavar='N',
                         help='number of cycles epochs to run')
@@ -334,7 +351,7 @@ if __name__ == "__main__":
                         metavar='W', help='weight decay (default: 1e-4)',
                         dest='weight_decay')
     parser.add_argument('--lr-step-size', default=8, type=int, help='decrease lr every step-size epochs')
-    parser.add_argument('--lr-steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
+    parser.add_argument('--lr-steps', default=[16, 19], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=1000, type=int, help='print frequency')
     parser.add_argument('--output-dir', default=None, help='path where to save')

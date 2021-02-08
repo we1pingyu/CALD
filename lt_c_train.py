@@ -187,11 +187,21 @@ def main(args):
                 subset = unlabeled_set[:10000]
             else:
                 subset = unlabeled_set
+            labeled_loader = DataLoader(dataset, batch_size=1,
+                                        sampler=SubsetSequentialSampler(labeled_set), num_workers=args.workers,
+                                        # more convenient if we maintain the order of subset
+                                        pin_memory=True, collate_fn=utils.collate_fn)
+            u = get_uncertainty(task_model, labeled_loader)
+            with open("vis/ltc_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                      "wb") as fp:  # Pickling
+                pickle.dump(u, fp)
             unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
             uncertainty = get_uncertainty(task_model, unlabeled_loader)
             arg = np.argsort(uncertainty)
-
+            with open("vis/ltc_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                      "wb") as fp:  # Pickling
+                pickle.dump(torch.tensor(uncertainty)[arg][:budget_num].numpy(), fp)
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
             # file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
@@ -234,12 +244,21 @@ def main(args):
             subset = unlabeled_set[:10000]
         else:
             subset = unlabeled_set
-        unlabeled_loader = DataLoader(dataset, batch_size=1,
-                                      sampler=SubsetSequentialSampler(subset), num_workers=args.workers,
-                                      # more convenient if we maintain the order of subset
-                                      pin_memory=True, collate_fn=utils.collate_fn)
+        labeled_loader = DataLoader(dataset, batch_size=1,
+                                    sampler=SubsetSequentialSampler(labeled_set), num_workers=args.workers,
+                                    # more convenient if we maintain the order of subset
+                                    pin_memory=True, collate_fn=utils.collate_fn)
+        u = get_uncertainty(task_model, labeled_loader)
+        with open("vis/ltc_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                  "wb") as fp:  # Pickling
+            pickle.dump(u, fp)
+        unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
+                                      num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
         uncertainty = get_uncertainty(task_model, unlabeled_loader)
         arg = np.argsort(uncertainty)
+        with open("vis/ltc_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                  "wb") as fp:  # Pickling
+            pickle.dump(torch.tensor(uncertainty)[arg][:budget_num].numpy(), fp)
         # Update the labeled dataset and the unlabeled dataset, respectively
         labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
         # file = open('vis/lt_c_{}.pkl'.format(cycle), "wb")
