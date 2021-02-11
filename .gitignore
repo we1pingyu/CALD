@@ -9,6 +9,7 @@ data/*
 # refactoring this file!
 
 ## PyTorch
+fig/
 basemodel/
 .mypy_cache
 *.npy
