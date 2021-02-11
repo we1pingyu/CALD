@@ -238,19 +238,19 @@ def main(args):
                 subset = unlabeled_set[:5000]
             else:
                 subset = unlabeled_set
-            # labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
-            #                             num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
-            # u = get_uncertainty(task_model, labeled_loader)
-            # with open("vis/lsc_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
-            #           "wb") as fp:  # Pickling
-            #     pickle.dump(u, fp)
+            labeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(labeled_set),
+                                        num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
+            u = get_uncertainty(task_model, labeled_loader)
+            with open("vis/lsc_labeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                      "wb") as fp:  # Pickling
+                pickle.dump(u, fp)
             unlabeled_loader = DataLoader(dataset_aug, batch_size=1, sampler=SubsetSequentialSampler(subset),
                                           num_workers=args.workers, pin_memory=True, collate_fn=utils.collate_fn)
             uncertainty = get_uncertainty(task_model, unlabeled_loader)
             arg = np.argsort(uncertainty)
-            # with open("vis/lsc_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
-            #           "wb") as fp:  # Pickling
-            #     pickle.dump(torch.tensor(uncertainty)[arg][:int(budget_num)].numpy(), fp)
+            with open("vis/lsc_unlabeled_metric_{}_{}_{}.pkl".format(args.model, args.dataset, cycle),
+                      "wb") as fp:  # Pickling
+                pickle.dump(torch.tensor(uncertainty)[arg][:int(budget_num)].numpy(), fp)
             # Update the labeled dataset and the unlabeled dataset, respectively
             labeled_set += list(torch.tensor(subset)[arg][:budget_num].numpy())
             labeled_set = list(set(labeled_set))

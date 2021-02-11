@@ -292,7 +292,7 @@ def draw_PIL_image(image, boxes, labels, scores, name):
     plt.cla()
 
 
-def draw_PIL_image_2(image, ref_boxes, boxes, ref_labels, labels, scores, pm, name, no=None, color='greenyellow'):
+def draw_PIL_image_1(image, ref_boxes, boxes, ref_labels, labels, scores, pm, name, no=None):
     if type(image) != PIL.Image.Image:
         image = F.to_pil_image(image)
     plt.imshow(image)
@@ -307,22 +307,45 @@ def draw_PIL_image_2(image, ref_boxes, boxes, ref_labels, labels, scores, pm, na
     if no is not None:
         for n in no:
             if i < 1:
-                color = 'greenyellow'
+                color = 'green'
                 x, y = ref_boxes[n][0], ref_boxes[n][1]
                 w, h = ref_boxes[n][2] - ref_boxes[n][0], ref_boxes[n][3] - ref_boxes[n][1]
-                plt.text(x, y, '{}={}'.format(voc_labels[ref_labels[n] - 1], round(scores[n].item(), 1)), color=color,
-                         verticalalignment='bottom',
-                         fontsize=16)
+                plt.text(x, y, '{}={}'.format(voc_labels[ref_labels[n] - 1], round(scores[n].item(), 2)),
+                         color='white',
+                         verticalalignment='bottom', bbox={'facecolor': color, 'alpha': 1.0},
+                         fontsize=24)
             else:
                 color = 'red'
                 x, y = boxes[n][0], boxes[n][1]
                 w, h = boxes[n][2] - boxes[n][0], boxes[n][3] - boxes[n][1]
-                plt.text(x, y + h, '{}={}'.format(voc_labels[labels[n] - 1], round(pm[n].item(), 1)), color=color,
-                         verticalalignment='bottom',
-                         fontsize=16)
+                plt.text(x, y + h, '{}={}'.format(voc_labels[labels[n] - 1], round(pm[n].item(), 2)), color='white',
+                         verticalalignment='bottom', bbox={'facecolor': color, 'alpha': 1.0},
+                         fontsize=24)
             i += 1
             plt.gca().add_patch(plt.Rectangle((x, y), w, h, fill=False, edgecolor=color, linewidth=2.5))
-    plt.savefig('vis/{}.jpg'.format(name), dpi=128, bbox_inches='tight', pad_inches=0)
+    plt.savefig('fig/{}'.format(name), dpi=256, bbox_inches='tight', pad_inches=0)
+    # plt.show()
+    plt.cla()
+
+
+def draw_PIL_image_2(image, boxes, ref_labels, name, no=None, color='green'):
+    if type(image) != PIL.Image.Image:
+        image = F.to_pil_image(image)
+    plt.imshow(image)
+    plt.axis('off')
+    plt.gca().set_axis_off()
+    plt.subplots_adjust(top=1, bottom=0, right=1, left=0,
+                        hspace=0, wspace=0)
+    plt.margins(0, 0)
+    plt.gca().xaxis.set_major_locator(plt.NullLocator())
+    plt.gca().yaxis.set_major_locator(plt.NullLocator())
+    i = 0
+    # if no is not None:
+    #     for n in no:
+    #         x, y = boxes[n][0], boxes[n][1]
+    #         w, h = boxes[n][2] - boxes[n][0], boxes[n][3] - boxes[n][1]
+    #         plt.gca().add_patch(plt.Rectangle((x, y), w, h, fill=False, edgecolor=color, linewidth=2.5))
+    plt.savefig('fig/o_{}.eps'.format(name), dpi=256, bbox_inches='tight', pad_inches=0)
     # plt.show()
     plt.cla()
 
