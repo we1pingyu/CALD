@@ -147,7 +147,7 @@ def get_uncertainty(task_model, unlabeled_loader, augs, num_cls):
                         aug_images.append(color_adjust_image.cuda())
                         aug_boxes.append(reference_boxes)
                 if 'sp' in augs:
-                    sp_image = SaltPepperNoise(image, 3 * 0.05)
+                    sp_image = SaltPepperNoise(image, 0.1)
                     aug_images.append(sp_image.cuda())
                     aug_boxes.append(ref_boxes)
                 if 'multi_sp' in augs:
@@ -240,7 +240,7 @@ def cls_kldiv(labeled_loader, cls_corrs, budget):
             result.append(cls_corr)
     for a in list(np.where(np.sum(cls_corrs, axis=1) == 0)[0]):
         cls_inds.append(a)
-        result.append(cls_corrs[a])
+        # result.append(cls_corrs[a])
     while len(cls_inds) < budget:
         # batch cls_corrs together to accelerate calculating
         KLDivLoss = nn.KLDivLoss(reduction='none')
@@ -253,6 +253,7 @@ def cls_kldiv(labeled_loader, cls_corrs, budget):
         jsdiv[cls_inds] = -1
         max_ind = torch.argmax(jsdiv).item()
         cls_inds.append(max_ind)
+        # result.append(cls_corrs[max_ind])
     return cls_inds
 
 
@@ -400,15 +401,15 @@ def main(args):
                     coco_evaluate(task_model, data_loader_test)
                 elif 'voc' in args.dataset:
                     voc_evaluate(task_model, data_loader_test, args.dataset, False, path=args.results_path)
-        # if not args.skip and cycle == 0:
-        #     if 'faster' in args.model:
-        #         utils.save_on_master({
-        #             'model': task_model.state_dict(), 'args': args},
-        #             os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
-        #     elif 'retina' in args.model:
-        #         utils.save_on_master({
-        #             'model': task_model.state_dict(), 'args': args},
-        #             os.path.join(args.first_checkpoint_path, '{}_retinanet_1st.pth'.format(args.dataset)))
+        if not args.skip and cycle == 0:
+            if 'faster' in args.model:
+                utils.save_on_master({
+                    'model': task_model.state_dict(), 'args': args},
+                    os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
+            elif 'retina' in args.model:
+                utils.save_on_master({
+                    'model': task_model.state_dict(), 'args': args},
+                    os.path.join(args.first_checkpoint_path, '{}_retinanet_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
             subset = unlabeled_set[:5000]
@@ -498,7 +499,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--no-mutual', help="without mutual information",
                         action="store_true")
     parser.add_argument('-mr', default=1.2, type=float, help='mutual range')
-    parser.add_argument('-bp', default=1.2, type=float, help='base point')
+    parser.add_argument('-bp', default=1.3, type=float, help='base point')
     parser.add_argument("--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo",
                         action="store_true")
     # distributed training parameters
