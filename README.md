@@ -5,7 +5,7 @@ pytorch>=1.7.1
 
 torch=0.8.2
 
-[option if you want to evaulate the code on coco and get class-wise results]
+(option if you want to get class-wise results of coco)
 
 mmcv=1.0.4
 
