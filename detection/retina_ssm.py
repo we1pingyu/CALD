@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.jit.annotations import Dict, List, Tuple
-
+import random
 from torchvision.models.utils import load_state_dict_from_url
 
 from torchvision.models.detection import _utils as det_utils
@@ -339,7 +339,7 @@ class RetinaNet(nn.Module):
                  proposal_matcher=None,
                  score_thresh=0.05,
                  nms_thresh=0.5,
-                 detections_per_img=300,
+                 detections_per_img=50,
                  fg_iou_thresh=0.5, bg_iou_thresh=0.4):
         super().__init__()
 
@@ -509,16 +509,6 @@ class RetinaNet(nn.Module):
         CONF_THRESH = 0.5  # bigger leads more active learning samples
         for index, (box_regression_per_image, scores_per_image, labels_per_image, anchors_per_image, image_shape) in \
                 enumerate(zip(box_regression, scores, labels, anchors, image_shapes)):
-
-            boxes_per_image = self.box_coder.decode_single(box_regression_per_image, anchors_per_image)
-            boxes_per_image = box_ops.clip_boxes_to_image(boxes_per_image, image_shape)
-
-            other_outputs_per_image = [(k, v[index]) for k, v in other_outputs.items()]
-
-            image_boxes = []
-            image_scores = []
-            image_labels = []
-            image_other_outputs = torch.jit.annotate(Dict[str, List[Tensor]], {})
             if torch.max(scores_per_image) < CONF_THRESH:
                 # print(scores)
                 al_idx = 1
@@ -529,6 +519,16 @@ class RetinaNet(nn.Module):
                     'al': al_idx,
                 })
                 continue
+            boxes_per_image = self.box_coder.decode_single(box_regression_per_image, anchors_per_image)
+            boxes_per_image = box_ops.clip_boxes_to_image(boxes_per_image, image_shape)
+
+            other_outputs_per_image = [(k, v[index]) for k, v in other_outputs.items()]
+
+            image_boxes = []
+            image_scores = []
+            image_labels = []
+            image_other_outputs = torch.jit.annotate(Dict[str, List[Tensor]], {})
+
             for class_index in range(num_classes):
                 # remove low scoring boxes
                 inds = torch.gt(scores_per_image[:, class_index], self.score_thresh)
@@ -536,6 +536,13 @@ class RetinaNet(nn.Module):
                     boxes_per_image[inds], scores_per_image[inds, class_index], scores_per_image[inds], \
                     labels_per_image[inds, class_index]
                 other_outputs_per_class = [(k, v[inds]) for k, v in other_outputs_per_image]
+
+                keep = [i for i in range(len(boxes_per_class))]
+                random.shuffle(keep)
+                keep = keep[:500]
+                boxes_per_class, scores_per_class, scores_all_class, labels_per_class = \
+                    boxes_per_class[keep], scores_per_class[keep], scores_all_class[keep], labels_per_class[keep]
+                other_outputs_per_class = [(k, v[keep]) for k, v in other_outputs_per_class]
 
                 # remove empty boxes
                 keep = box_ops.remove_small_boxes(boxes_per_class, min_size=1e-2)

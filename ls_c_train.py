@@ -181,7 +181,7 @@ def main(args):
     num_images = len(dataset)
     if 'voc' in args.dataset:
         init_num = 500
-        budget_num = 500
+        budget_num = 1000
         if 'retina' in args.model:
             init_num = 1000
             budget_num = 500

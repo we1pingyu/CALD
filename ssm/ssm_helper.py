@@ -22,7 +22,6 @@ def get_uncertainty(task_model, unlabeled_loader):
             scores = dets[0]['scores']
             labels = dets[0]['labels']
             al = dets[0]['al']
-            # print(scores)
             if al == 1:
                 al_idx.append(i)
                 # print(scores)
