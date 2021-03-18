@@ -1,4 +1,4 @@
-# active_learning_for_object_detection
+# Consistency-basd Active Learning for Object Detection
 ## Requirement
 - pytorch>=1.7.1
 - torch=0.8.2
