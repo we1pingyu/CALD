@@ -363,7 +363,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:5000]
+                subset = unlabeled_set[:10000]
             else:
                 subset = unlabeled_set
             if not args.no_mutual:
@@ -426,7 +426,7 @@ def main(args):
                     os.path.join(args.first_checkpoint_path, '{}_retinanet_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:5000]
+            subset = unlabeled_set[:10000]
         else:
             subset = unlabeled_set
         print("Getting stability")

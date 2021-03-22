@@ -145,7 +145,7 @@ def main(args):
     num_images = len(dataset)
     if 'voc' in args.dataset:
         init_num = 500
-        budget_num = 1000
+        budget_num = 500
     else:
         init_num = 5000
         budget_num = 1000

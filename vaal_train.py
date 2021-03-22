@@ -170,7 +170,7 @@ def main(args):
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
     if 'voc' in args.dataset:
         init_num = 500
-        budget_num = 1000
+        budget_num = 500
         if 'retina' in args.model:
             init_num = 1000
             budget_num = 500

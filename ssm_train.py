@@ -119,7 +119,7 @@ def main(args):
         dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
     if 'voc' in args.dataset:
         init_num = 500
-        budget_num = 1000
+        budget_num = 500
         if 'retina' in args.model:
             init_num = 1000
             budget_num = 500
@@ -186,7 +186,7 @@ def main(args):
             print("Getting stability")
             random.shuffle(unlabeled_set)
             if 'coco' in args.dataset:
-                subset = unlabeled_set[:2000]
+                subset = unlabeled_set[:10000]
             else:
                 subset = unlabeled_set
             unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
@@ -296,7 +296,7 @@ def main(args):
         #         os.path.join(args.first_checkpoint_path, '{}_frcnn_1st.pth'.format(args.dataset)))
         random.shuffle(unlabeled_set)
         if 'coco' in args.dataset:
-            subset = unlabeled_set[:2000]
+            subset = unlabeled_set[:10000]
         else:
             subset = unlabeled_set
         unlabeled_loader = DataLoader(dataset, batch_size=1, sampler=SubsetSequentialSampler(subset),
