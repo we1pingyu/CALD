@@ -2,7 +2,8 @@
 
 ## Introduction
 This repo is the official implementation CALD: [**Consistency-basd Active Learning for Object Detection.**](https://arxiv.org/abs/2103.10374)
-
+![detail](detail.pdf). 
+![results](results.png)
 ## Requirement
 - pytorch>=1.7.1
 - torch=0.8.2
