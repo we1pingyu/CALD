@@ -1,7 +1,7 @@
 # Consistency-basd Active Learning for Object Detection
 
 ## Introduction
-This repo is the official implementation of CALD: [**Consistency-basd Active Learning for Object Detection.**](https://arxiv.org/abs/2103.10374)
+This repo is the official implementation of CALD: [**Consistency-basd Active Learning for Object Detection**](https://arxiv.org/abs/2103.10374)
 
 ![detail](detail.png). 
 ![results](results.png)
