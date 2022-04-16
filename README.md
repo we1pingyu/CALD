@@ -1,7 +1,7 @@
 # Consistency-basd Active Learning for Object Detection
 
 ## Introduction
-This repo is the official implementation of CALD: [**Consistency-basd Active Learning for Object Detection**](https://arxiv.org/abs/2103.10374), accepted to the Workshop on Learning With Limited Labelled Data for Image and Video Understanding (L3D-IVU).
+This repo is the official implementation of CALD: [**Consistency-basd Active Learning for Object Detection**](https://arxiv.org/abs/2103.10374), accepted to the Workshop on Learning With Limited Labelled Data for Image and Video Understanding (L3D-IVU), in conjunction with CVPR 2022.
 
 ![detail](detail.jpg)
 ![results](results.png)
