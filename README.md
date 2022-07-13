@@ -7,7 +7,7 @@ This repo is the official implementation of CALD: [**Consistency-basd Active Lea
 ![results](results.png)
 ## Requirement
 - pytorch>=1.7.1
-- torch=0.8.2
+- torchvision=0.8.2
 
 (option if you want to get class-wise results of coco)
 
